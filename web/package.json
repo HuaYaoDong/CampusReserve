@@ -1,0 +1,20 @@
+{
+  "name": "campus-reserve-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "@vitejs/plugin-vue": "5.2.1",
+    "pinia": "2.3.0",
+    "typescript": "5.7.3",
+    "vite": "6.0.11",
+    "vue": "3.5.13"
+  },
+  "devDependencies": {}
+}
+

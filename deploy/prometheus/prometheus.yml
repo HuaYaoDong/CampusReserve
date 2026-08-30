@@ -1,0 +1,12 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: campus-reserve-api
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - api-1:8000
+          - api-2:8000
+

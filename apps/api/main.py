@@ -3,8 +3,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 import campus_reserve.models  # noqa: F401
+from campus_reserve.admin.controllers.http import router as admin_router
+from campus_reserve.admin.services import AdminRuleError
 from campus_reserve.auth.controllers.http import router as auth_router
 from campus_reserve.bookings.controllers.http import router as booking_router
 from campus_reserve.inventory.controllers.http import router as venue_router
@@ -44,8 +47,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(PrometheusMiddleware)
+app.include_router(admin_router, prefix="/api/v1/admin", tags=["administration"])
 app.include_router(auth_router, prefix="/api/v1/auth", tags=["authentication"])
 app.include_router(booking_router, prefix="/api/v1", tags=["bookings"])
 app.include_router(venue_router, prefix="/api/v1/venues", tags=["venues and inventory"])
 app.include_router(system_router, prefix="/api/v1/system", tags=["system"])
 app.add_api_route("/metrics", metrics_endpoint, include_in_schema=False)
+
+
+@app.exception_handler(AdminRuleError)
+async def admin_rule_error_handler(_: object, exc: AdminRuleError) -> JSONResponse:
+    return JSONResponse(
+        status_code=404 if exc.not_found else 409,
+        content={"detail": {"code": exc.code, "message": str(exc)}},
+    )

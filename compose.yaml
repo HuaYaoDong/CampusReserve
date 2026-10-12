@@ -10,6 +10,7 @@ x-backend-environment: &backend-environment
   BOOKING_DEAD_LETTER_STREAM: ${BOOKING_DEAD_LETTER_STREAM:-campus-reserve:{booking}:reservation-events:dead-letter}
   BOOKING_CONSUMER_GROUP: ${BOOKING_CONSUMER_GROUP:-booking-workers}
   BOOKING_CLAIM_IDLE_MS: ${BOOKING_CLAIM_IDLE_MS:-30000}
+  BOOKING_MAX_DELIVERIES: ${BOOKING_MAX_DELIVERIES:-5}
   BOOKING_RESULT_TTL_SECONDS: ${BOOKING_RESULT_TTL_SECONDS:-604800}
   JWT_SECRET: ${JWT_SECRET:-course-design-only-secret-change-before-release}
   JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}

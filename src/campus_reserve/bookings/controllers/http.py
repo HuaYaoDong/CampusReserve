@@ -40,6 +40,7 @@ settings = get_settings()
 REDIS_ERROR_MESSAGES = {
     **ERROR_MESSAGES,
     "BATCH_DATE_MISMATCH": "预约批次与日期不匹配",
+    "BATCH_NOT_OPEN": "当前批次已暂停或关闭",
     "REDIS_STATE_INVALID": "预约库存状态异常，请稍后重试",
 }
 
@@ -71,6 +72,16 @@ async def create_booking_request(
             slot_ids=tuple(payload.slot_ids),
         )
     )
+    if result.code is RedisReservationCode.IDEMPOTENCY_CONFLICT:
+        response.status_code = status.HTTP_409_CONFLICT
+        return BookingRequestResponse(
+            request_id=payload.request_id,
+            status=BookingRequestStatus.FAILED,
+            error_code=result.code.value,
+            error_message=REDIS_ERROR_MESSAGES[result.code.value],
+            replayed=result.replayed,
+            booking=None,
+        )
     state = await redis.hgetall(keyspace.request(payload.request_id))
     if not result.reserved:
         response.status_code = _redis_error_status(result.code)

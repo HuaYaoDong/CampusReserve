@@ -87,6 +87,10 @@ class InventoryService:
         should_release = now >= release_at
 
         await self.repository.acquire_generation_lock(venue.id, service_date)
+        configuration = await self.repository.get_active_configuration(service_date)
+        if configuration is None:
+            raise InventoryConfigurationError("没有适用于目标日期的启用场馆和开放模板")
+        venue, template, courts, exceptions = configuration
         existing = await self.repository.get_batch(venue.id, service_date)
         if existing is not None:
             released = False

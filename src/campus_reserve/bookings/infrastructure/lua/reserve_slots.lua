@@ -63,6 +63,10 @@ end
 if redis.call("HGET", KEYS[2], "__service_date") ~= service_date then
     return remember_failure("BATCH_DATE_MISMATCH")
 end
+local batch_status = redis.call("HGET", KEYS[2], "__batch_status")
+if batch_status and batch_status ~= "OPEN" then
+    return remember_failure("BATCH_NOT_OPEN")
+end
 
 if slot_count < 1 or slot_count > 2 then
     return remember_failure("INVALID_SLOT_COUNT")

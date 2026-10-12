@@ -51,6 +51,7 @@ async def test_async_api_reserves_then_returns_worker_final_result() -> None:
     request_id = uuid4()
     service_date = date(2090, 1, 2)
     user_id = 0
+    other_user_id = 0
     batch_id = 0
     slot_ids: list[int] = []
     message_ids: list[str] = []
@@ -73,6 +74,18 @@ async def test_async_api_reserves_then_returns_worker_final_result() -> None:
             await setup.flush()
             user_id = user.id
             access_token, _ = create_access_token(user)
+            other_user = User(
+                username=f"async-api-other-{token}",
+                password_hash="test-only",
+                student_no=f"B{token[:20]}",
+                display_name="异步 API 测试学生二",
+                role=UserRole.STUDENT,
+                status=UserStatus.ACTIVE,
+            )
+            setup.add(other_user)
+            await setup.flush()
+            other_user_id = other_user.id
+            other_access_token, _ = create_access_token(other_user)
             batch = ReleaseBatch(
                 venue_id=1,
                 service_date=service_date,
@@ -144,6 +157,14 @@ async def test_async_api_reserves_then_returns_worker_final_result() -> None:
             assert processing.status_code == 200
             assert processing.json()["status"] == "PROCESSING"
 
+            conflicting_body = {**body, "slot_ids": [slot_ids[0] + 1]}
+            pending_conflict = await client.post(
+                "/api/v1/booking-requests", headers=headers, json=conflicting_body
+            )
+            assert pending_conflict.status_code == 409
+            assert pending_conflict.json()["status"] == "FAILED"
+            assert pending_conflict.json()["error_code"] == "IDEMPOTENCY_CONFLICT"
+
             entries = await consumer.read_new(block_ms=1)
             assert len(entries) == 1
             message_ids = [entries[0][0]]
@@ -167,6 +188,22 @@ async def test_async_api_reserves_then_returns_worker_final_result() -> None:
             assert replay.status_code == 200
             assert replay.json()["status"] == "CONFIRMED"
             assert replay.json()["replayed"] is True
+
+            confirmed_conflict = await client.post(
+                "/api/v1/booking-requests", headers=headers, json=conflicting_body
+            )
+            assert confirmed_conflict.status_code == 409
+            assert confirmed_conflict.json()["status"] == "FAILED"
+            assert confirmed_conflict.json()["error_code"] == "IDEMPOTENCY_CONFLICT"
+            assert confirmed_conflict.json()["booking"] is None
+            other_user_conflict = await client.post(
+                "/api/v1/booking-requests",
+                headers={"Authorization": f"Bearer {other_access_token}"},
+                json=body,
+            )
+            assert other_user_conflict.status_code == 409
+            assert other_user_conflict.json()["error_code"] == "IDEMPOTENCY_CONFLICT"
+            assert other_user_conflict.json()["booking"] is None
             assert await redis.xlen(keyspace.stream) >= 1
     finally:
         app.dependency_overrides.pop(get_session, None)
@@ -221,5 +258,6 @@ async def test_async_api_reserves_then_returns_worker_final_result() -> None:
                 )
                 await cleanup.execute(delete(ReleaseBatch).where(ReleaseBatch.id == batch_id))
                 await cleanup.execute(delete(User).where(User.id == user_id))
+                await cleanup.execute(delete(User).where(User.id == other_user_id))
         await redis.aclose()
         await engine.dispose()

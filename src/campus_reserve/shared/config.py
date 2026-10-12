@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     )
     booking_consumer_group: str = "booking-workers"
     booking_claim_idle_ms: int = 30_000
+    booking_max_deliveries: int = 5
     booking_result_ttl_seconds: int = 7 * 24 * 60 * 60
     jwt_secret: str = "replace-this-in-a-real-environment"
     jwt_algorithm: str = "HS256"

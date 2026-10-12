@@ -32,6 +32,8 @@ ERROR_MESSAGES = {
     "IDEMPOTENCY_CONFLICT": "同一请求编号不能提交不同的预约内容",
     "REQUEST_NOT_FOUND": "预约请求不存在",
     "BOOKING_NOT_FOUND": "预约不存在",
+    "INVALID_EVENT_PAYLOAD": "预约事件异常，已终止处理",
+    "PERSISTENCE_RETRY_EXHAUSTED": "预约处理失败，已终止重试",
 }
 
 

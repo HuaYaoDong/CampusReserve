@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import campus_reserve.models  # noqa: F401
+from campus_reserve.admin.services import archive_completed_bookings
 from campus_reserve.bookings.services.redis_reservation import (
     RedisAtomicReservationService,
     RedisConfirmedUsage,
@@ -72,6 +73,9 @@ async def synchronize_inventory() -> None:
                 ],
                 _confirmed_usages(confirmed_rows),
             )
+            await get_redis().hsetnx(
+                RedisReservationKeyspace().periods(result.batch_id), "__batch_status", "OPEN"
+            )
         logger.info(
             "inventory_synchronized",
             extra={
@@ -92,6 +96,16 @@ async def synchronize_inventory() -> None:
         logger.exception("inventory_synchronization_failed")
 
 
+async def complete_finished_bookings() -> None:
+    try:
+        async with async_session_factory() as session, session.begin():
+            completed = await archive_completed_bookings(session, datetime.now(ZoneInfo("UTC")))
+        if completed:
+            logger.info("bookings_completed", extra={"count": completed})
+    except Exception:
+        logger.exception("booking_completion_failed")
+
+
 def _confirmed_usages(
     rows: list[tuple[int, datetime, datetime]],
 ) -> list[RedisConfirmedUsage]:
@@ -107,6 +121,7 @@ def _confirmed_usages(
 async def run() -> None:
     await write_heartbeat()
     await synchronize_inventory()
+    await complete_finished_bookings()
     scheduler = AsyncIOScheduler(timezone=settings.timezone)
     scheduler.add_job(
         write_heartbeat,
@@ -121,6 +136,14 @@ async def run() -> None:
         trigger="interval",
         seconds=30,
         id="inventory-synchronization",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        complete_finished_bookings,
+        trigger="interval",
+        seconds=60,
+        id="booking-completion",
         max_instances=1,
         coalesce=True,
     )

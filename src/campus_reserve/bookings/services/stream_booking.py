@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from campus_reserve.bookings.infrastructure.sqlalchemy_repository import (
     SqlAlchemyBookingRepository,
 )
+from campus_reserve.bookings.models import BookingRequest
 from campus_reserve.bookings.services.redis_reservation import (
     RedisAtomicReservationService,
     RedisReservationCommand,
@@ -19,6 +20,7 @@ from campus_reserve.bookings.services.redis_reservation import (
     reservation_fingerprint,
 )
 from campus_reserve.bookings.services.sync_booking import BookingRuleError, SyncBookingService
+from campus_reserve.shared.enums import BookingRequestStatus
 
 
 class BookingEventPayloadError(ValueError):
@@ -109,9 +111,71 @@ class BookingEventProcessor:
                 booking_no=booking.booking_no,
             )
 
+    async def reconcile(
+        self, command: RedisReservationCommand, error_code: str
+    ) -> BookingPersistenceResult:
+        """Read the committed outcome before releasing an uncertain Redis claim."""
+        async with self.sessions() as session, session.begin():
+            repository = SqlAlchemyBookingRepository(session)
+            await repository.acquire_request_lock(command.request_id)
+            request = await repository.get_request(command.request_id)
+            if request is None:
+                finished_at = datetime.now(UTC)
+                await repository.add_request(
+                    BookingRequest(
+                        request_id=command.request_id,
+                        user_id=command.user_id,
+                        release_batch_id=command.batch_id,
+                        slot_ids=sorted(command.slot_ids),
+                        status=BookingRequestStatus.FAILED,
+                        error_code=error_code,
+                        accepted_at=finished_at,
+                        finished_at=finished_at,
+                    )
+                )
+                return BookingPersistenceResult(
+                    request_id=command.request_id,
+                    status=BookingPersistenceStatus.FAILED,
+                    replayed=False,
+                    command=command,
+                    error_code=error_code,
+                )
+            if (
+                request.user_id != command.user_id
+                or request.release_batch_id != command.batch_id
+                or sorted(request.slot_ids) != sorted(command.slot_ids)
+            ):
+                raise BookingEventPayloadError("预约事件与数据库请求不一致")
+            if request.status is BookingRequestStatus.CONFIRMED and request.booking is not None:
+                if any(
+                    item.service_date != command.service_date for item in request.booking.items
+                ):
+                    raise BookingEventPayloadError("预约事件日期与数据库库存不一致")
+                return BookingPersistenceResult(
+                    request_id=command.request_id,
+                    status=BookingPersistenceStatus.CONFIRMED,
+                    replayed=True,
+                    command=command,
+                    booking_id=request.booking.id,
+                    booking_no=request.booking.booking_no,
+                )
+            if request.status is BookingRequestStatus.FAILED:
+                return BookingPersistenceResult(
+                    request_id=command.request_id,
+                    status=BookingPersistenceStatus.FAILED,
+                    replayed=True,
+                    command=command,
+                    error_code=request.error_code or error_code,
+                )
+            raise RuntimeError("预约数据库结果仍在处理中")
+
 
 class BookingEventHandler(Protocol):
     async def process(self, payload: dict[str, str]) -> BookingPersistenceResult: ...
+
+    async def reconcile(
+        self, command: RedisReservationCommand, error_code: str
+    ) -> BookingPersistenceResult: ...
 
 
 class BookingStreamConsumer:
@@ -126,7 +190,10 @@ class BookingStreamConsumer:
         consumer_name: str,
         keyspace: RedisReservationKeyspace | None = None,
         result_ttl_seconds: int = 7 * 24 * 60 * 60,
+        max_deliveries: int = 5,
     ) -> None:
+        if max_deliveries < 1:
+            raise ValueError("max_deliveries must be positive")
         self.redis = redis
         self.processor = processor
         self.stream = stream
@@ -135,6 +202,7 @@ class BookingStreamConsumer:
         self.consumer_name = consumer_name
         self.keyspace = keyspace or RedisReservationKeyspace()
         self.result_ttl_seconds = result_ttl_seconds
+        self.max_deliveries = max_deliveries
         self.reservations = RedisAtomicReservationService(
             redis,
             keyspace=self.keyspace,
@@ -182,19 +250,41 @@ class BookingStreamConsumer:
         try:
             result = await self.processor.process(payload)
         except BookingEventPayloadError as exc:
-            await self._dead_letter(message_id, payload, str(exc))
-            return BookingPersistenceResult(
-                request_id=_safe_request_id(payload),
-                status=BookingPersistenceStatus.DEAD_LETTERED,
-                replayed=False,
-                error_code="INVALID_EVENT_PAYLOAD",
+            return await self._resolve_and_dead_letter(
+                message_id, payload, "INVALID_EVENT_PAYLOAD", str(exc)
+            )
+        except Exception as exc:
+            pending = await self.redis.xpending_range(
+                self.stream, self.group, min=message_id, max=message_id, count=1
+            )
+            deliveries = pending[0]["times_delivered"] if pending else 0
+            if deliveries < self.max_deliveries:
+                raise
+            return await self._resolve_and_dead_letter(
+                message_id,
+                payload,
+                "PERSISTENCE_RETRY_EXHAUSTED",
+                f"{type(exc).__name__} after {deliveries} deliveries",
             )
 
         if result.status is BookingPersistenceStatus.FAILED and result.command is not None:
-            await self.reservations.compensate(
+            compensation = await self.reservations.compensate(
                 result.command,
                 result.error_code or "DATABASE_PERSISTENCE_FAILED",
             )
+            if compensation.code != "RELEASED":
+                raise RuntimeError(f"预约补偿失败: {compensation.code}")
+
+        await self._finish_message(message_id, result)
+        return result
+
+    async def _finish_message(
+        self,
+        message_id: str,
+        result: BookingPersistenceResult,
+        *,
+        dead_letter: tuple[dict[str, str], str] | None = None,
+    ) -> None:
 
         request_key = self.keyspace.request(result.request_id)
         mapping = {
@@ -206,30 +296,69 @@ class BookingStreamConsumer:
             "persisted_at": datetime.now(UTC).isoformat(),
         }
         async with self.redis.pipeline(transaction=True) as pipeline:
-            pipeline.hset(request_key, mapping=mapping)
-            pipeline.expire(request_key, self.result_ttl_seconds)
+            if result.command is not None:
+                pipeline.hset(request_key, mapping=mapping)
+                pipeline.expire(request_key, self.result_ttl_seconds)
+            if dead_letter is not None:
+                payload, error = dead_letter
+                pipeline.xadd(
+                    self.dead_letter_stream,
+                    {
+                        "source_message_id": message_id,
+                        "error": error,
+                        "payload": json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                        "resolution": result.status.value,
+                        "failed_at": datetime.now(UTC).isoformat(),
+                    },
+                )
             pipeline.xack(self.stream, self.group, message_id)
             await pipeline.execute()
-        return result
 
-    async def _dead_letter(
+    async def _resolve_and_dead_letter(
         self,
         message_id: str,
         payload: dict[str, str],
+        error_code: str,
         error: str,
-    ) -> None:
-        async with self.redis.pipeline(transaction=True) as pipeline:
-            pipeline.xadd(
-                self.dead_letter_stream,
-                {
-                    "source_message_id": message_id,
-                    "error": error,
-                    "payload": json.dumps(payload, ensure_ascii=False, sort_keys=True),
-                    "failed_at": datetime.now(UTC).isoformat(),
-                },
+    ) -> BookingPersistenceResult:
+        command = await self._reserved_command_for_message(message_id, payload)
+        if command is None:
+            result = BookingPersistenceResult(
+                request_id=_safe_request_id(payload),
+                status=BookingPersistenceStatus.DEAD_LETTERED,
+                replayed=False,
+                error_code=error_code,
             )
-            pipeline.xack(self.stream, self.group, message_id)
-            await pipeline.execute()
+        else:
+            result = await self.processor.reconcile(command, error_code)
+            if result.status is BookingPersistenceStatus.FAILED:
+                compensation = await self.reservations.compensate(
+                    command, result.error_code or error_code
+                )
+                if compensation.code != "RELEASED":
+                    raise RuntimeError(f"预约补偿失败: {compensation.code}")
+        await self._finish_message(message_id, result, dead_letter=(payload, error))
+        return result
+
+    async def _reserved_command_for_message(
+        self, message_id: str, payload: dict[str, str]
+    ) -> RedisReservationCommand | None:
+        request_id = _safe_request_id(payload)
+        if request_id.int == 0:
+            return None
+        state = await self.redis.hgetall(self.keyspace.request(request_id))
+        if state.get("code") != "RESERVED" or state.get("stream_id") != message_id:
+            return None
+        try:
+            return RedisReservationCommand(
+                request_id=request_id,
+                user_id=int(state["user_id"]),
+                batch_id=int(state["batch_id"]),
+                service_date=date.fromisoformat(state["service_date"]),
+                slot_ids=tuple(int(value) for value in state["slot_ids"].split(",")),
+            )
+        except (KeyError, ValueError) as exc:
+            raise RuntimeError("预约占位状态无法解析，需要人工处理") from exc
 
 
 def _safe_request_id(payload: dict[str, str]) -> UUID:

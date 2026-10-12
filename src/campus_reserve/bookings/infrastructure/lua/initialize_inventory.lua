@@ -120,6 +120,7 @@ for index = 1, confirmed_user_count do
     redis.call("EXPIRE", KEYS[usage_key_index + 1], ttl_seconds)
 end
 redis.call("HSET", KEYS[2], "__service_date", service_date)
+redis.call("HSET", KEYS[2], "__batch_status", "OPEN")
 redis.call("SET", KEYS[3], fingerprint, "EX", ttl_seconds)
 redis.call("EXPIRE", KEYS[1], ttl_seconds)
 redis.call("EXPIRE", KEYS[2], ttl_seconds)

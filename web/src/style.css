@@ -174,6 +174,7 @@ input:focus { border-color: #178a72; box-shadow: 0 0 0 4px rgba(23,138,114,.11);
 .booking-record { margin-top: 16px; padding: 18px; display: grid; grid-template-columns: minmax(220px, .8fr) 1fr auto; align-items: center; gap: 24px; border: 1px solid #e1ebe7; border-radius: 13px; }
 .booking-record > div:first-child, .booking-record-items { display: grid; gap: 5px; }
 .booking-record > div:first-child span, .booking-record-items span { color: #71817c; font-size: 12px; }
+.booking-record > div:first-child .booking-service-date { color: #176b57; font-size: 14px; font-weight: 700; }
 .booking-status { padding: 7px 10px; border-radius: 99px; color: #08705b; background: #e4f7f0; font-size: 12px; font-weight: 800; }
 
 @media (max-width: 920px) {

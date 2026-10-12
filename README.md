@@ -18,11 +18,12 @@ Redis Streams 异步落库。Booking Worker 消费占位事件并幂等写入 Po
 - Locust 压测入口
 - Pytest、Ruff 与容器健康检查
 - 14 张核心业务表、数据库约束和固定场馆种子数据
-- Argon2 密码哈希、30 分钟 JWT 和模拟学生登录页面
+- Argon2 密码哈希、30 分钟 JWT，以及学生和管理员页面
 - 定时生成未来第 2 天的 210 个场地库存，并在每天 08:00 自动放号
 - PostgreSQL 同步预约闭环：幂等、行锁、每日两小时额度、时间冲突和数据库防超卖
 - Redis Lua 原子占位：库存、每日额度、时间占用、请求幂等和事件入流一次完成
 - Booking Worker：消费 `reservation-events`、数据库幂等落库、故障消息重领和死信处理
+- 管理闭环：场馆与场地维护、模板及例外日期、库存预览与放号控制、预约检索、现场签到、审计及完成状态归档
 
 后端按 MVC 分层组织：`controllers` 接收 HTTP 请求，`services` 承载业务逻辑，后续
 各业务域的 `models`/`repositories` 负责数据模型和持久化。API、异步 Worker 和调度器
@@ -60,6 +61,8 @@ docker compose ps
 | 提交预约 | `POST /api/v1/booking-requests` | Redis 原子占位，返回 `202 PROCESSING` 或最终结果 |
 | 预约结果 | `GET /api/v1/booking-requests/{request_id}` | 查询 `PROCESSING/CONFIRMED/FAILED` 最终状态 |
 | 我的预约 | <http://localhost:8080/api/v1/bookings> | 查询当前学生的预约记录 |
+| 管理台 | <http://localhost:8080> | 使用管理员账号登录后自动进入管理页面 |
+| 管理 API | `GET /api/v1/admin/overview` | 其余管理接口见 API 文档 |
 | API 健康状态 | <http://localhost:8080/api/v1/system/health> | 同时检查 PostgreSQL、Redis |
 | API 文档 | <http://localhost:8000/docs> | 直连 `api-1`，便于本地调试 |
 | Locust | <http://localhost:8089> | 压测控制台 |
@@ -70,15 +73,26 @@ docker compose ps
 
 ## 模拟登录账号
 
-课程演示时可直接在首页使用以下学生账号，数据库中仅保存 Argon2 密码哈希：
+课程演示时可直接在首页使用以下账号，数据库中仅保存 Argon2 密码哈希：
 
 | 用户名 | 密码 | 身份 |
 |---|---|---|
 | `student001` | `Student@123` | 演示学生一 |
 | `student002` | `Student@123` | 演示学生二 |
+| `venue_admin` | `Admin@123` | 场馆管理员 |
+| `platform_admin` | `Admin@123` | 平台管理员，可维护开放模板 |
 
 登录成功后前端把短期 JWT 保存在当前浏览器标签页的 `sessionStorage`，关闭标签页即清除；
 JWT 默认 30 分钟失效。登录接口另有限速，预约压测流量不会与密码哈希计算共用限流额度。
+
+## 管理操作顺序
+
+管理员登录后可按“场馆与场地 → 开放规则 → 库存与放号 → 预约与签到 → 审计日志”操作。
+库存先预览、生成草稿并发布，达到放号时间后可手工放号；已开放批次可暂停、恢复或关闭。
+暂停及关闭会同步拦截 Redis 预约入口，恢复时会核对数据库库存与未完成占位。
+场馆或场地停用会暂停当前开放批次，恢复运营后需手工恢复批次。
+预约查询支持编号、用户名、日期和场地筛选；现场签到接口可安全重试。
+调度器每分钟将结束时段的有效预约归档为 `COMPLETED`。
 
 ## 验证与日常命令
 
@@ -131,8 +145,10 @@ Redis 键均设置过期时间，测试使用随机 hash tag 隔离数据并在�
 
 如果进程在数据库提交后、`XACK` 前退出，消息会在空闲 30 秒后被另一个 Worker 通过
 `XAUTOCLAIM` 重领；请求 UUID 和数据库唯一约束保证重放不会产生第二笔预约。格式错误或
-指纹不一致的消息会写入 `reservation-events:dead-letter` 后确认，临时数据库故障则不确认，
-等待后续重试。
+指纹不一致的消息会写入 `reservation-events:dead-letter`。处理异常默认最多投递 5 次
+（可通过 `BOOKING_MAX_DELIVERIES` 调整）；达到上限后先持有请求级数据库锁核对结果：
+已提交的预约恢复为成功，未提交的请求记录失败并释放仍属于它的 Redis 占位，然后写入死信流并确认。
+数据库不可查询时保留待处理消息，避免在提交结果不明时释放库存。
 
 如果数据库明确拒绝落库，Worker 会通过补偿 Lua 仅释放仍属于该请求的临时占位，并回退
 该用户的 Redis 每日额度和时间占用；补偿本身同样幂等，不用于用户主动取消预约。

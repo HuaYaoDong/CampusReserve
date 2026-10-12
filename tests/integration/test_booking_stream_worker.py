@@ -326,3 +326,216 @@ async def test_worker_compensates_redis_reservation_after_permanent_database_fai
     finally:
         await cleanup_redis(redis, keyspace)
         await redis.aclose()
+
+
+@pytest.mark.integration
+async def test_invalid_reserved_event_releases_claim_and_records_failed_result() -> None:
+    settings = get_settings()
+    engine = create_async_engine(settings.postgres_dsn, poolclass=NullPool)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    redis = Redis.from_url(settings.redis_url, decode_responses=True)
+    keyspace = RedisReservationKeyspace(f"campus-reserve:{{poison-claim-{uuid4().hex}}}")
+    service_date = date(2080, 1, 2)
+    request_id = uuid4()
+    group = f"poison-claim-{uuid4().hex}"
+    user_id = 0
+    batch_id = 0
+    try:
+        async with sessions() as setup, setup.begin():
+            user = User(
+                username=f"poison-claim-{uuid4().hex}",
+                password_hash="test-only",
+                student_no=f"P{uuid4().hex[:20]}",
+                display_name="异常事件测试学生",
+                role=UserRole.STUDENT,
+                status=UserStatus.ACTIVE,
+            )
+            setup.add(user)
+            await setup.flush()
+            user_id = user.id
+            batch = ReleaseBatch(
+                venue_id=1,
+                service_date=service_date,
+                release_at=datetime.now(UTC) - timedelta(minutes=1),
+                status=ReleaseBatchStatus.OPEN,
+                slot_count=1,
+                rule_snapshot={},
+                opened_at=datetime.now(UTC),
+            )
+            setup.add(batch)
+            await setup.flush()
+            batch_id = batch.id
+        reservations = RedisAtomicReservationService(redis, keyspace=keyspace, ttl_seconds=60)
+        await reservations.initialize_inventory(
+            batch_id, service_date, [RedisInventorySlot(1, "08:00-09:00")]
+        )
+        consumer = BookingStreamConsumer(
+            redis,
+            BookingEventProcessor(sessions),
+            stream=keyspace.stream,
+            dead_letter_stream=f"{keyspace.stream}:dead-letter",
+            group=group,
+            consumer_name="worker-test",
+            keyspace=keyspace,
+            result_ttl_seconds=60,
+        )
+        await consumer.ensure_group()
+        await reservations.reserve(
+            RedisReservationCommand(request_id, user_id, batch_id, service_date, (1,))
+        )
+        message_id, payload = (await consumer.read_new(block_ms=1))[0]
+        result = await consumer.process_message(message_id, {**payload, "fingerprint": "invalid"})
+
+        assert result.status is BookingPersistenceStatus.FAILED
+        assert result.error_code == "INVALID_EVENT_PAYLOAD"
+        assert await redis.hget(keyspace.slots(batch_id), "1") == "AVAILABLE"
+        assert await redis.get(keyspace.usage(batch_id, user_id)) is None
+        assert (await redis.hgetall(keyspace.request(request_id)))["persistence_status"] == "FAILED"
+        async with sessions() as verify:
+            failed_request = await verify.get(BookingRequest, request_id)
+            assert failed_request is not None
+            assert failed_request.status is BookingRequestStatus.FAILED
+            assert failed_request.error_code == "INVALID_EVENT_PAYLOAD"
+        late_replay = await BookingEventProcessor(sessions).process(payload)
+        assert late_replay.status is BookingPersistenceStatus.FAILED
+        assert late_replay.replayed is True
+        assert await redis.xlen(f"{keyspace.stream}:dead-letter") == 1
+        assert (await redis.xpending(keyspace.stream, group))["pending"] == 0
+    finally:
+        await cleanup_redis(redis, keyspace)
+        if batch_id:
+            async with sessions() as cleanup, cleanup.begin():
+                await cleanup.execute(
+                    delete(BookingRequest).where(BookingRequest.request_id == request_id)
+                )
+                await cleanup.execute(delete(ReleaseBatch).where(ReleaseBatch.id == batch_id))
+                await cleanup.execute(delete(User).where(User.id == user_id))
+        await redis.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("database_status", "expected_slot"),
+    [
+        (BookingPersistenceStatus.FAILED, "AVAILABLE"),
+        (BookingPersistenceStatus.CONFIRMED, "RESERVED"),
+    ],
+)
+async def test_worker_reconciles_after_retry_limit(
+    database_status: BookingPersistenceStatus, expected_slot: str
+) -> None:
+    redis = Redis.from_url(get_settings().redis_url, decode_responses=True)
+    keyspace = RedisReservationKeyspace(f"campus-reserve:{{retry-limit-{uuid4().hex}}}")
+    service_date = date(2080, 1, 2)
+    request_id = uuid4()
+    group = f"retry-limit-{uuid4().hex}"
+
+    class FailingProcessor:
+        async def process(self, payload: dict[str, str]) -> BookingPersistenceResult:
+            raise RuntimeError("temporary failure")
+
+        async def reconcile(
+            self, command: RedisReservationCommand, error_code: str
+        ) -> BookingPersistenceResult:
+            return BookingPersistenceResult(
+                request_id=command.request_id,
+                status=database_status,
+                replayed=False,
+                command=command,
+                error_code=(
+                    error_code if database_status is BookingPersistenceStatus.FAILED else None
+                ),
+                booking_id=123 if database_status is BookingPersistenceStatus.CONFIRMED else None,
+            )
+
+    try:
+        reservations = RedisAtomicReservationService(redis, keyspace=keyspace, ttl_seconds=60)
+        await reservations.initialize_inventory(
+            100, service_date, [RedisInventorySlot(1, "08:00-09:00")]
+        )
+        consumer = BookingStreamConsumer(
+            redis,
+            FailingProcessor(),
+            stream=keyspace.stream,
+            dead_letter_stream=f"{keyspace.stream}:dead-letter",
+            group=group,
+            consumer_name="worker-test",
+            keyspace=keyspace,
+            result_ttl_seconds=60,
+            max_deliveries=2,
+        )
+        await consumer.ensure_group()
+        await reservations.reserve(
+            RedisReservationCommand(request_id, 1, 100, service_date, (1,))
+        )
+        message_id, payload = (await consumer.read_new(block_ms=1))[0]
+        with pytest.raises(RuntimeError, match="temporary failure"):
+            await consumer.process_message(message_id, payload)
+        assert (await redis.xpending(keyspace.stream, group))["pending"] == 1
+
+        claimed = await consumer.claim_stale(min_idle_ms=0)
+        result = await consumer.process_message(*claimed[0])
+        assert result.status is database_status
+        slot_state = await redis.hget(keyspace.slots(100), "1")
+        assert slot_state.startswith(expected_slot)
+        request_state = await redis.hgetall(keyspace.request(request_id))
+        assert request_state["persistence_status"] == database_status.value
+        if database_status is BookingPersistenceStatus.FAILED:
+            assert result.error_code == "PERSISTENCE_RETRY_EXHAUSTED"
+        else:
+            assert request_state["booking_id"] == "123"
+        assert await redis.xlen(f"{keyspace.stream}:dead-letter") == 1
+        assert (await redis.xpending(keyspace.stream, group))["pending"] == 0
+    finally:
+        await cleanup_redis(redis, keyspace)
+        await redis.aclose()
+
+
+@pytest.mark.integration
+async def test_worker_keeps_claim_when_database_outcome_cannot_be_checked() -> None:
+    redis = Redis.from_url(get_settings().redis_url, decode_responses=True)
+    keyspace = RedisReservationKeyspace(f"campus-reserve:{{uncertain-{uuid4().hex}}}")
+    group = f"uncertain-{uuid4().hex}"
+    request_id = uuid4()
+    service_date = date(2080, 1, 2)
+
+    class UnavailableProcessor:
+        async def process(self, payload: dict[str, str]) -> BookingPersistenceResult:
+            raise RuntimeError("database unavailable")
+
+        async def reconcile(
+            self, command: RedisReservationCommand, error_code: str
+        ) -> BookingPersistenceResult:
+            raise RuntimeError("database unavailable")
+
+    try:
+        reservations = RedisAtomicReservationService(redis, keyspace=keyspace, ttl_seconds=60)
+        await reservations.initialize_inventory(
+            100, service_date, [RedisInventorySlot(1, "08:00-09:00")]
+        )
+        consumer = BookingStreamConsumer(
+            redis,
+            UnavailableProcessor(),
+            stream=keyspace.stream,
+            dead_letter_stream=f"{keyspace.stream}:dead-letter",
+            group=group,
+            consumer_name="worker-test",
+            keyspace=keyspace,
+            result_ttl_seconds=60,
+            max_deliveries=1,
+        )
+        await consumer.ensure_group()
+        await reservations.reserve(
+            RedisReservationCommand(request_id, 1, 100, service_date, (1,))
+        )
+        message_id, payload = (await consumer.read_new(block_ms=1))[0]
+        with pytest.raises(RuntimeError, match="database unavailable"):
+            await consumer.process_message(message_id, payload)
+        assert (await redis.hget(keyspace.slots(100), "1")).startswith("RESERVED:")
+        assert (await redis.hgetall(keyspace.request(request_id))).get("persistence_status") is None
+        assert await redis.xlen(f"{keyspace.stream}:dead-letter") == 0
+        assert (await redis.xpending(keyspace.stream, group))["pending"] == 1
+    finally:
+        await cleanup_redis(redis, keyspace)
+        await redis.aclose()

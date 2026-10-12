@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import AdminPanel from "./AdminPanel.vue";
 
 type ComponentState = { status: "ok" | "error"; detail?: string | null };
 type Health = {
@@ -128,7 +129,7 @@ async function login() {
     user.value = result.user;
     sessionStorage.setItem(SESSION_KEY, result.access_token);
     password.value = "";
-    await Promise.all([refreshInventory(), refreshBookings()]);
+    if (result.user.role === "STUDENT") await Promise.all([refreshInventory(), refreshBookings()]);
   } catch (reason) {
     loginError.value = reason instanceof Error ? reason.message : "登录失败";
   } finally {
@@ -147,7 +148,7 @@ async function restoreSession() {
     });
     if (!response.ok) throw new Error("登录已过期");
     user.value = (await response.json()) as UserProfile;
-    await Promise.all([refreshInventory(), refreshBookings()]);
+    if (user.value.role === "STUDENT") await Promise.all([refreshInventory(), refreshBookings()]);
   } catch {
     logout();
   } finally {
@@ -360,7 +361,7 @@ onBeforeUnmount(() => window.clearInterval(healthTimer));
         <div class="card-heading">
           <div>
             <p class="eyebrow">模拟统一身份认证</p>
-            <h2>学生登录</h2>
+            <h2>账号登录</h2>
           </div>
           <span :class="['service-state', health?.status === 'ok' && !healthError ? 'ok' : 'warn']">
             {{ healthLabel }}
@@ -393,10 +394,17 @@ onBeforeUnmount(() => window.clearInterval(healthTimer));
           <span>student001 / Student@123</span>
           <button type="button" @click="username = 'student001'; password = 'Student@123'">一键填入</button>
         </div>
+        <div class="demo-account">
+          <strong>演示管理员账号</strong>
+          <span>venue_admin / Admin@123</span>
+          <button type="button" @click="username = 'venue_admin'; password = 'Admin@123'">一键填入</button>
+        </div>
         <p class="security-note">密码使用 Argon2 哈希保存；登录凭证 30 分钟后失效。</p>
       </div>
     </section>
   </main>
+
+  <AdminPanel v-else-if="user && user.role !== 'STUDENT'" :token="token" :user="user" @logout="logout" />
 
   <main v-else class="dashboard-page">
     <header class="topbar">
@@ -516,6 +524,7 @@ onBeforeUnmount(() => window.clearInterval(healthTimer));
           <article v-for="booking in bookings" :key="booking.id" class="booking-record">
             <div>
               <strong>{{ booking.booking_no }}</strong>
+              <span class="booking-service-date">使用日期：{{ booking.items[0]?.service_date ?? "待确认" }}</span>
               <span>预约成功后不可取消</span>
             </div>
             <div class="booking-record-items">

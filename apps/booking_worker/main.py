@@ -29,6 +29,7 @@ async def run() -> None:
         consumer_name=consumer_name,
         keyspace=RedisReservationKeyspace(),
         result_ttl_seconds=settings.booking_result_ttl_seconds,
+        max_deliveries=settings.booking_max_deliveries,
     )
     await consumer.ensure_group()
     logger.info(

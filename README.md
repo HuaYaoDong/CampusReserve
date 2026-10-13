@@ -6,6 +6,8 @@
 Redis Streams 异步落库。Booking Worker 消费占位事件并幂等写入 PostgreSQL，页面通过
 结果查询接口等待最终确认。
 
+现场启动、功能演示和压测操作见[答辩操作手册](docs/答辩操作手册.md)；逐文件说明和现场修改定位见[项目代码分析与现场修改指南](docs/项目代码分析与现场修改指南.md)。
+
 ## 当前工程底座
 
 - Vue 3 + TypeScript 前端，由 Nginx 提供静态资源
@@ -19,9 +21,9 @@ Redis Streams 异步落库。Booking Worker 消费占位事件并幂等写入 Po
 - Pytest、Ruff 与容器健康检查
 - 14 张核心业务表、数据库约束和固定场馆种子数据
 - Argon2 密码哈希、30 分钟 JWT，以及学生和管理员页面
-- 定时生成未来第 2 天的 210 个场地库存，并在每天 08:00 自动放号
-- PostgreSQL 同步预约闭环：幂等、行锁、每日两小时额度、时间冲突和数据库防超卖
-- Redis Lua 原子占位：库存、每日额度、时间占用、请求幂等和事件入流一次完成
+- 定时生成明天的 210 个场地库存，并在每天 08:00 自动放号
+- PostgreSQL 同步预约闭环：幂等、行锁、每日两个时段额度和数据库防超卖
+- Redis Lua 原子占位：库存、每日额度、请求幂等和事件入流一次完成
 - Booking Worker：消费 `reservation-events`、数据库幂等落库、故障消息重领和死信处理
 - 管理闭环：场馆与场地维护、模板及例外日期、库存预览与放号控制、预约检索、现场签到、审计及完成状态归档
 
@@ -29,9 +31,9 @@ Redis Streams 异步落库。Booking Worker 消费占位事件并幂等写入 Po
 各业务域的 `models`/`repositories` 负责数据模型和持久化。API、异步 Worker 和调度器
 共享 `src/campus_reserve` 中的业务层，不在入口程序中堆放业务规则。
 
-数据库模型、模拟登录和库存生成阶段已完成。当前迁移版本为 `0005_inventory_idempotency`，包含用户、每日额度、
+数据库模型、模拟登录和库存生成阶段已完成。当前迁移版本为 `0006_next_day_parallel`，包含用户、每日额度、
 场馆、场地、开放模板、例外日、放号批次、库存时段、预约请求、预约、预约明细、状态
-历史、签到和审计日志。数据库会直接拒绝每日超过两个时段、库存重复占用、学生时间重叠、
+历史、签到和审计日志。数据库会直接拒绝每日超过两个时段、库存重复占用、
 非法状态组合和非 60 分钟库存。
 
 完整需求和开发计划见[项目规划](docs/project-plan.md)。
@@ -57,7 +59,7 @@ docker compose ps
 | 登录接口 | <http://localhost:8080/api/v1/auth/login> | 模拟登录并签发 JWT |
 | 当前用户 | <http://localhost:8080/api/v1/auth/me> | 使用 Bearer JWT 获取用户资料 |
 | 场馆列表 | <http://localhost:8080/api/v1/venues> | 使用 Bearer JWT 查询唯一场馆和 15 片场地 |
-| 库存查询 | <http://localhost:8080/api/v1/venues/1/inventory> | 查询未来第 2 天的 210 个时段库存 |
+| 库存查询 | <http://localhost:8080/api/v1/venues/1/inventory> | 默认查询明天的 210 个时段库存，也可指定 `service_date` |
 | 提交预约 | `POST /api/v1/booking-requests` | Redis 原子占位，返回 `202 PROCESSING` 或最终结果 |
 | 预约结果 | `GET /api/v1/booking-requests/{request_id}` | 查询 `PROCESSING/CONFIRMED/FAILED` 最终状态 |
 | 我的预约 | <http://localhost:8080/api/v1/bookings> | 查询当前学生的预约记录 |
@@ -71,9 +73,10 @@ docker compose ps
 | PostgreSQL | `localhost:5432` | 数据库 `campus_reserve` |
 | Redis | `localhost:6379` | 默认 DB 0 |
 
-学生首页默认进入按开放规则确定的预约日期，可以选择时段提交预约。页面另提供“今天”和
-“昨天”两个使用日期查询选项，仅用于查看场地状态；切回“开放预约日”可继续预约。
-全新部署通常没有今天或昨天的库存批次，查询时会显示“暂无库存记录”，不影响开放预约日。
+学生首页直接显示“今天”和“明天”两个使用日期，默认显示明天；每天 08:00 放出明天的库存。
+两个日期中尚未开始的可用时段可以预约，同一学生同一时间可订不同场地，每天累计最多两个时段。
+调度器会补齐当天尚不存在的库存批次；今天显示全部时段，已开始且被预约的显示“已预约”，
+其他已开始的时段显示“已过期”，尚未开始的空闲时段仍可预约。
 
 ## 模拟登录账号
 
@@ -124,15 +127,15 @@ PostgreSQL、Redis、Prometheus 和 Grafana Docker 卷，不能用于保留数�
 ## Redis Lua 独立占位原型
 
 原型采用带 `{booking}` hash tag 的 Redis 键，保证一次 Lua 调用涉及的库存、用户额度、
-用户已占时间、请求结果和事件流位于同一 Redis Cluster 槽位。抢占成功后返回
+请求结果和事件流位于同一 Redis Cluster 槽位。抢占成功后返回
 `RESERVED`，并向独立的 `reservation-events` Stream 写入一条待落库事件；失败返回稳定
 错误码并缓存请求结果，重复请求不会再次扣减库存或重复写入事件。
 
 当前脚本覆盖以下规则：
 
-- 每次必须选择 1～2 个不同的时段
-- 每名学生每天最多占用 2 个小时
-- 同一学生不能占用时间相同的不同场地
+- 每次必须选择 1～2 个不同的场地时段
+- 每名学生每天最多占用 2 个场地时段
+- 同一学生可以预约同一时间的不同场地，分别计入每日额度
 - 一个库存时段只能由一个请求占用
 - 同一个请求 UUID 和相同内容可安全重试
 - 同一个请求 UUID 携带不同内容会返回 `IDEMPOTENCY_CONFLICT`
@@ -155,25 +158,25 @@ Redis 键均设置过期时间，测试使用随机 hash tag 隔离数据并在�
 数据库不可查询时保留待处理消息，避免在提交结果不明时释放库存。
 
 如果数据库明确拒绝落库，Worker 会通过补偿 Lua 仅释放仍属于该请求的临时占位，并回退
-该用户的 Redis 每日额度和时间占用；补偿本身同样幂等，不用于用户主动取消预约。
+该用户的 Redis 每日额度；补偿本身同样幂等，不用于用户主动取消预约。
 
 Redis 请求结果 Hash 会增加 `persistence_status`、`booking_id`、`booking_no`、
 `persistence_error_code` 和 `persisted_at` 字段，供后续结果查询 API 使用。
 
-## 每名学生每天两小时并发额度
+## 每名学生每天两个时段的并发额度
 
 Redis 的用户额度值同时包含 PostgreSQL 已确认时段和 Streams 中等待落库的临时时段。
-Scheduler 在 Redis 库存首次生成或缓存恢复时，会把数据库中已确认的用量、占用时间与
-场地库存放在同一次 Lua 调用中原子初始化；新请求占位后立即增加临时额度，明确落库失败
-才由补偿 Lua 回退，因此并发请求不会绕过两小时粗筛。
+Scheduler 在 Redis 库存首次生成或缓存恢复时，会把数据库中已确认的用量与场地库存放在
+同一次 Lua 调用中原子初始化；新请求占位后立即增加临时额度，明确落库失败才由补偿 Lua
+回退，因此并发请求不会绕过两个时段的额度限制。
 
 Worker 落库时按“学生 + 预约日期”取得 PostgreSQL 事务级 advisory lock，再对
 `user_daily_usage` 执行 `SELECT ... FOR UPDATE`。数据库会重新统计并校验累计时段，且
-`used_slot_count BETWEEN 0 AND 2` 检查约束提供最后一道保护。一次选择的两个不连续时段
+`used_slot_count BETWEEN 0 AND 2` 检查约束提供最后一道保护。一次选择的两个时段
 位于同一事务中，要么同时确认，要么均不占用库存。
 
 集成测试会并发提交同一学生的 100 个单时段请求，并断言 PostgreSQL 最终只有 2 个确认、
-98 个失败、每日用量恒为 2；同时覆盖“数据库已确认 1 小时 + Redis 待确认 1 小时”的
+98 个失败、每日用量恒为 2；同时覆盖“数据库已确认 1 个时段 + Redis 待确认 1 个时段”的
 恢复场景以及双时段全成全败。
 
 ## 下一步开发顺序

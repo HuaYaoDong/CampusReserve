@@ -14,7 +14,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB, ExcludeConstraint
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -132,12 +132,6 @@ class BookingItem(TimestampMixin, Base):
         CheckConstraint("start_at < end_at", name="start_before_end"),
         CheckConstraint(
             "end_at - start_at = INTERVAL '60 minutes'", name="duration_exactly_60_minutes"
-        ),
-        ExcludeConstraint(
-            ("user_id", "="),
-            (func.tstzrange(text("start_at"), text("end_at"), "[)"), "&&"),
-            name="booking_item_user_time_excl",
-            using="gist",
         ),
         Index("ix_booking_item_user_date", "user_id", "service_date"),
     )

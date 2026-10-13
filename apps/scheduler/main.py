@@ -3,7 +3,7 @@ import os
 import signal
 import socket
 from collections import defaultdict
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -41,12 +41,16 @@ async def write_heartbeat() -> None:
 
 
 async def synchronize_inventory() -> None:
+    now = datetime.now(ZoneInfo(settings.timezone))
+    for service_date in (now.date(), None):
+        await _synchronize_inventory_for_date(now, service_date)
+
+
+async def _synchronize_inventory_for_date(now: datetime, service_date: date | None) -> None:
     try:
         async with async_session_factory() as session, session.begin():
             service = InventoryService(SqlAlchemyInventoryRepository(session))
-            result = await service.synchronize_target(
-                datetime.now(ZoneInfo(settings.timezone))
-            )
+            result = await service.synchronize_target(now, service_date=service_date)
             view = await service.get_inventory(result.venue_id, result.service_date)
             confirmed_rows = await service.repository.list_batch_confirmed_usage(result.batch_id)
         redis_inventory = None
@@ -65,7 +69,7 @@ async def synchronize_inventory() -> None:
                         period_token=f"{slot.start_at.isoformat()}|{slot.end_at.isoformat()}",
                         state=(
                             RedisSlotState.AVAILABLE
-                            if slot.status is BookingSlotStatus.AVAILABLE
+                            if slot.status is BookingSlotStatus.AVAILABLE and slot.start_at > now
                             else RedisSlotState.UNAVAILABLE
                         ),
                     )

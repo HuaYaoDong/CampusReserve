@@ -91,7 +91,7 @@ class OpeningTemplate(TimestampMixin, Base):
         CheckConstraint("open_time = TIME '08:00:00'", name="mvp_open_time_0800"),
         CheckConstraint("close_time = TIME '22:00:00'", name="mvp_close_time_2200"),
         CheckConstraint("slot_minutes = 60", name="mvp_slot_minutes_60"),
-        CheckConstraint("advance_days = 2", name="mvp_advance_days_2"),
+        CheckConstraint("advance_days = 1", name="mvp_advance_days_1"),
         CheckConstraint("release_time = TIME '08:00:00'", name="mvp_release_time_0800"),
         CheckConstraint("valid_to IS NULL OR valid_from <= valid_to", name="valid_date_range"),
         CheckConstraint("status IN ('DRAFT', 'ACTIVE', 'ARCHIVED')", name="template_status"),
@@ -113,7 +113,7 @@ class OpeningTemplate(TimestampMixin, Base):
     open_time: Mapped[time] = mapped_column(Time, nullable=False, default=time(8, 0))
     close_time: Mapped[time] = mapped_column(Time, nullable=False, default=time(22, 0))
     slot_minutes: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=60)
-    advance_days: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=2)
+    advance_days: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
     release_time: Mapped[time] = mapped_column(Time, nullable=False, default=time(8, 0))
     valid_from: Mapped[date] = mapped_column(Date, nullable=False)
     valid_to: Mapped[date | None] = mapped_column(Date)

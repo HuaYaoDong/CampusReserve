@@ -63,15 +63,17 @@ class InventoryService:
     def __init__(self, repository: InventoryRepository) -> None:
         self.repository = repository
 
-    async def synchronize_target(self, now: datetime) -> InventorySyncResult:
+    async def synchronize_target(
+        self, now: datetime, service_date: date | None = None
+    ) -> InventorySyncResult:
         local_now = now.astimezone(ZoneInfo("Asia/Shanghai"))
-        provisional_date = local_now.date() + timedelta(days=2)
+        provisional_date = service_date or local_now.date() + timedelta(days=1)
         configuration = await self.repository.get_active_configuration(provisional_date)
         if configuration is None:
             raise InventoryConfigurationError("没有适用于目标日期的启用场馆和开放模板")
 
         venue, template, courts, exceptions = configuration
-        service_date = local_now.date() + timedelta(days=template.advance_days)
+        service_date = service_date or local_now.date() + timedelta(days=template.advance_days)
         if service_date != provisional_date:
             configuration = await self.repository.get_active_configuration(service_date)
             if configuration is None:
@@ -107,9 +109,6 @@ class InventoryService:
                 released=released,
             )
 
-        slot_status = (
-            BookingSlotStatus.AVAILABLE if should_release else BookingSlotStatus.UNRELEASED
-        )
         batch_status = ReleaseBatchStatus.OPEN if should_release else ReleaseBatchStatus.READY
         planned_slots = self._plan_slots(
             venue,
@@ -142,7 +141,11 @@ class InventoryService:
                 service_date=service_date,
                 start_at=start_at,
                 end_at=end_at,
-                status=slot_status,
+                status=(
+                    BookingSlotStatus.AVAILABLE
+                    if should_release
+                    else BookingSlotStatus.UNRELEASED
+                ),
             )
             for court_id, start_at, end_at in planned_slots
         ]

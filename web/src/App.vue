@@ -23,7 +23,7 @@ type TokenResponse = {
   expires_in: number;
   user: UserProfile;
 };
-type SlotStatus = "UNRELEASED" | "AVAILABLE" | "PROCESSING" | "BOOKED" | "BLOCKED" | "EXPIRED" | "VIEW_ONLY";
+type SlotStatus = "UNRELEASED" | "AVAILABLE" | "PROCESSING" | "BOOKED" | "BLOCKED" | "EXPIRED";
 type InventorySlot = {
   id: number;
   start_at: string;
@@ -99,9 +99,9 @@ function shanghaiDateISO(now = new Date()) {
   const value = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
   return `${value("year")}-${value("month")}-${value("day")}`;
 }
-function previousDateISO(value: string) {
+function nextDateISO(value: string) {
   const date = new Date(`${value}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() - 1);
+  date.setUTCDate(date.getUTCDate() + 1);
   return date.toISOString().slice(0, 10);
 }
 const username = ref("student001");
@@ -114,10 +114,9 @@ const restoring = ref(Boolean(token.value));
 const health = ref<Health | null>(null);
 const healthError = ref("");
 const inventory = ref<Inventory | null>(null);
-const inventoryView = ref<"booking" | "history">("booking");
 const todayServiceDate = ref(shanghaiDateISO());
-const requestedServiceDate = ref(todayServiceDate.value);
-const selectableServiceDates = computed(() => [todayServiceDate.value, previousDateISO(todayServiceDate.value)]);
+const requestedServiceDate = ref(nextDateISO(todayServiceDate.value));
+const selectableServiceDates = computed(() => [todayServiceDate.value, nextDateISO(todayServiceDate.value)]);
 const nowMilliseconds = ref(Date.now());
 const inventoryError = ref("");
 const inventoryLoading = ref(false);
@@ -149,6 +148,7 @@ const selectedSlots = computed(() => {
 });
 const bookableSlotCount = computed(() => inventory.value?.courts.reduce((count, court) =>
   count + court.slots.filter((slot) => visibleSlotStatus(slot) === "AVAILABLE").length, 0) ?? 0);
+const isTodayInventory = computed(() => inventory.value?.service_date === todayServiceDate.value);
 
 async function login() {
   loginError.value = "";
@@ -206,8 +206,7 @@ function logout() {
   token.value = "";
   user.value = null;
   inventory.value = null;
-  inventoryView.value = "booking";
-  requestedServiceDate.value = shanghaiDateISO();
+  requestedServiceDate.value = nextDateISO(shanghaiDateISO());
   inventoryFetchRevision += 1;
   inventoryLoading.value = false;
   inventoryError.value = "";
@@ -240,8 +239,7 @@ async function refreshInventory() {
   if (!token.value) return;
   updateDateWindow();
   const revision = ++inventoryFetchRevision;
-  const query = inventoryView.value === "history"
-    ? `?service_date=${encodeURIComponent(requestedServiceDate.value)}` : "";
+  const query = `?service_date=${encodeURIComponent(requestedServiceDate.value)}`;
   inventoryLoading.value = true;
   inventoryError.value = "";
   try {
@@ -254,8 +252,7 @@ async function refreshInventory() {
       logout();
       throw new Error("登录已过期，请重新登录");
     }
-    if (response.status === 404) throw new Error(inventoryView.value === "history"
-      ? "所选日期暂无库存记录" : "开放预约日库存尚未生成");
+    if (response.status === 404) throw new Error("所选日期暂无库存记录");
     if (!response.ok) throw new Error("库存读取失败，请稍后刷新");
     const result = (await response.json()) as Inventory;
     if (revision !== inventoryFetchRevision) return;
@@ -271,21 +268,9 @@ async function refreshInventory() {
 
 function selectServiceDate(serviceDate: string) {
   updateDateWindow();
-  if (bookingLoading.value || (inventoryView.value === "history" && requestedServiceDate.value === serviceDate) ||
+  if (bookingLoading.value || requestedServiceDate.value === serviceDate ||
     !selectableServiceDates.value.includes(serviceDate)) return;
-  inventoryView.value = "history";
   requestedServiceDate.value = serviceDate;
-  selectedSlotIds.value = [];
-  pendingRequestId.value = "";
-  bookingMessage.value = "";
-  bookingError.value = "";
-  inventory.value = null;
-  void refreshInventory();
-}
-
-function showBookingInventory() {
-  if (bookingLoading.value || inventoryView.value === "booking") return;
-  inventoryView.value = "booking";
   selectedSlotIds.value = [];
   pendingRequestId.value = "";
   bookingMessage.value = "";
@@ -309,7 +294,7 @@ function updateDateWindow() {
   if (currentDate === todayServiceDate.value) return;
   todayServiceDate.value = currentDate;
   if (!selectableServiceDates.value.includes(requestedServiceDate.value)) {
-    requestedServiceDate.value = currentDate;
+    requestedServiceDate.value = nextDateISO(currentDate);
     selectedSlotIds.value = [];
     pendingRequestId.value = "";
     inventory.value = null;
@@ -447,13 +432,13 @@ function removeTrackedRequest(requestId: string) {
 }
 
 function toggleSlot(slot: InventorySlot) {
-  if (inventoryView.value !== "booking" || visibleSlotStatus(slot) !== "AVAILABLE" || bookingLoading.value) return;
+  if (visibleSlotStatus(slot) !== "AVAILABLE" || bookingLoading.value) return;
   bookingMessage.value = "";
   bookingError.value = "";
   if (selectedSlotIds.value.includes(slot.id)) {
     selectedSlotIds.value = selectedSlotIds.value.filter((id) => id !== slot.id);
   } else if (selectedSlotIds.value.length >= 2) {
-    bookingError.value = "每天最多选择两个小时";
+    bookingError.value = "每天最多选择两个时段";
     return;
   } else {
     selectedSlotIds.value = [...selectedSlotIds.value, slot.id];
@@ -463,7 +448,7 @@ function toggleSlot(slot: InventorySlot) {
 
 async function submitBooking() {
   updateDateWindow();
-  if (!token.value || !inventory.value || inventoryView.value !== "booking" ||
+  if (!token.value || !inventory.value || !selectableServiceDates.value.includes(inventory.value.service_date) ||
     selectedSlotIds.value.length === 0 ||
     selectedSlots.value.some((slot) => visibleSlotStatus(slot) !== "AVAILABLE")) return;
   bookingLoading.value = true;
@@ -589,14 +574,14 @@ function slotLabel(status: SlotStatus) {
     BOOKED: "已预约",
     BLOCKED: "已关闭",
     EXPIRED: "已过期",
-    VIEW_ONLY: "空闲",
   }[status];
 }
 
 function visibleSlotStatus(slot: InventorySlot): SlotStatus {
-  if (slot.status !== "AVAILABLE") return slot.status;
-  if (Date.parse(slot.start_at) <= nowMilliseconds.value) return "EXPIRED";
-  return inventoryView.value === "booking" ? "AVAILABLE" : "VIEW_ONLY";
+  if (Date.parse(slot.start_at) <= nowMilliseconds.value) {
+    return slot.status === "BOOKED" ? "BOOKED" : "EXPIRED";
+  }
+  return slot.status;
 }
 
 onMounted(() => {
@@ -628,7 +613,7 @@ onBeforeUnmount(() => window.clearInterval(healthTimer));
       <h1>校园羽毛球场<br />高并发预约系统</h1>
       <p class="intro">面向课程设计的 MVP。集中验证万人同时抢订场景下的身份认证、库存一致性与零超卖。</p>
       <div class="venue-facts">
-        <span>15 片场地</span><span>08:00—22:00</span><span>提前 2 天预约</span>
+        <span>15 片场地</span><span>08:00—22:00</span><span>提前 1 天预约</span>
       </div>
     </section>
 
@@ -694,7 +679,7 @@ onBeforeUnmount(() => window.clearInterval(healthTimer));
     <section class="dashboard-content">
       <p class="eyebrow">预约中心</p>
       <h1>你好，{{ user?.display_name }}</h1>
-      <p class="intro">开放预约日可选择时段；另可查询今天或昨天的场地使用情况。</p>
+      <p class="intro">查看今天和明天的场地，选择可预约时段提交预约。</p>
 
       <div class="dashboard-grid">
         <article class="feature-card main-feature">
@@ -702,7 +687,7 @@ onBeforeUnmount(() => window.clearInterval(healthTimer));
           <div>
             <p class="eyebrow">唯一场馆</p>
             <h2>{{ inventory?.venue_name ?? "校园羽毛球馆" }}</h2>
-            <p>每天 08:00—22:00 开放，共 15 片场地；每天 08:00 放出未来第 2 天的库存。</p>
+            <p>每天 08:00—22:00 开放，共 15 片场地；每天 08:00 放出明天的库存。</p>
           </div>
           <span :class="['release-badge', inventory?.is_released ? 'open' : 'ready']">
             {{ inventory ? (inventory.is_released ? "已放号" : "待放号") :
@@ -710,35 +695,29 @@ onBeforeUnmount(() => window.clearInterval(healthTimer));
               inventoryError ? "读取失败" : "查询中" }}
           </span>
         </article>
-        <article class="feature-card rule-card"><strong>每日额度</strong><span>最多 2 小时，可不连续</span></article>
-        <article class="feature-card rule-card"><strong>{{ inventoryView === "booking" ? "预约日期" : "查询日期" }}</strong><span>{{ inventory ? formatDate(inventory.service_date) : inventoryView === "history" ? formatDate(requestedServiceDate) : "读取中" }}</span></article>
+        <article class="feature-card rule-card"><strong>每日额度</strong><span>最多 2 个时段，可同时段选择不同场地</span></article>
+        <article class="feature-card rule-card"><strong>使用日期</strong><span>{{ formatDate(requestedServiceDate) }}</span></article>
         <article class="feature-card rule-card"><strong>系统状态</strong><span :class="health?.status === 'ok' ? 'green-text' : 'orange-text'">{{ healthLabel }}</span></article>
       </div>
 
       <section class="inventory-section">
-        <div class="booking-date-entry">
-          <div><strong>开放预约日</strong><span>按场馆规则自动定位当前可预约日期</span></div>
-          <button type="button" class="refresh-button" :disabled="bookingLoading || inventoryView === 'booking'"
-            @click="showBookingInventory">
-            {{ inventoryView === "booking" ? "正在查看" : "前往预约" }}
-          </button>
-        </div>
         <div class="service-date-picker" role="group" aria-label="选择场地使用日期">
-          <span>查询使用日期（仅供查看）</span>
+          <span>选择使用日期</span>
           <button v-for="(serviceDate, index) in selectableServiceDates" :key="serviceDate"
-            type="button" :class="['date-option', { active: inventoryView === 'history' && requestedServiceDate === serviceDate }]"
-            :aria-pressed="inventoryView === 'history' && requestedServiceDate === serviceDate" :disabled="bookingLoading"
+            type="button" :class="['date-option', { active: requestedServiceDate === serviceDate }]"
+            :aria-pressed="requestedServiceDate === serviceDate" :disabled="bookingLoading"
             @click="selectServiceDate(serviceDate)">
-            {{ index === 0 ? "今天" : "昨天" }} · {{ formatDate(serviceDate) }}
+            {{ index === 0 ? "今天" : "明天" }} · {{ formatDate(serviceDate) }}
           </button>
         </div>
         <div class="inventory-heading">
           <div>
-            <p class="eyebrow">{{ inventoryView === "booking" ? "实时库存" : "日期查询" }}</p>
-            <h2>{{ inventoryView === "booking" ? "可预约场地与时段" : "场地使用情况" }}</h2>
+            <p class="eyebrow">实时库存</p>
+            <h2>场地与时段</h2>
             <p v-if="inventory" class="inventory-summary">
-              共 {{ inventory.slot_count }} 个时段库存<span v-if="inventoryView === 'booking'">，当前 {{ bookableSlotCount }} 个可预约</span>
+              共 {{ inventory.slot_count }} 个场地时段，当前 {{ bookableSlotCount }} 个可预约
             </p>
+            <p v-if="isTodayInventory" class="inventory-summary">已开始的时段显示预约结果；尚未开始的空闲时段仍可预约。</p>
           </div>
           <button type="button" class="refresh-button" :disabled="inventoryLoading" @click="refreshInventory">
             {{ inventoryLoading ? "刷新中…" : "刷新库存" }}
@@ -772,7 +751,7 @@ onBeforeUnmount(() => window.clearInterval(healthTimer));
                       visibleSlotStatus(slot).toLowerCase(),
                       { selected: selectedSlotIds.includes(slot.id) },
                     ]"
-                    :disabled="inventoryView !== 'booking' || visibleSlotStatus(slot) !== 'AVAILABLE' || bookingLoading"
+                    :disabled="visibleSlotStatus(slot) !== 'AVAILABLE' || bookingLoading"
                     :aria-label="`${court.name} ${formatTime(slot.start_at)} ${slotLabel(visibleSlotStatus(slot))}`"
                     @click="toggleSlot(slot)"
                   >
@@ -783,7 +762,7 @@ onBeforeUnmount(() => window.clearInterval(healthTimer));
             </tbody>
           </table>
         </div>
-        <div v-if="inventoryView === 'booking' && selectedSlots.length" class="booking-action-bar">
+        <div v-if="selectedSlots.length" class="booking-action-bar">
           <div>
             <strong>已选择 {{ selectedSlots.length }} 个时段</strong>
             <span v-for="slot in selectedSlots" :key="slot.id">
@@ -808,7 +787,6 @@ onBeforeUnmount(() => window.clearInterval(healthTimer));
           <span><i class="booked" />已预约</span>
           <span><i class="blocked" />已关闭</span>
           <span><i class="expired" />已过期</span>
-          <span v-if="inventoryView === 'history'"><i class="view-only" />空闲</span>
         </div>
       </section>
 

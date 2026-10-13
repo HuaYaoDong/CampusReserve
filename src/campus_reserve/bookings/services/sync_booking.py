@@ -22,13 +22,14 @@ from campus_reserve.users.models import UserDailyUsage
 ERROR_MESSAGES = {
     "SLOTS_NOT_FOUND": "部分场地时段不存在",
     "INVALID_SLOT_COUNT": "一次只能选择一至两个时段",
-    "SLOTS_MUST_BE_UNIQUE": "同一时段不能重复选择",
+    "SLOTS_MUST_BE_UNIQUE": "同一场地时段不能重复选择",
     "SLOTS_MUST_SHARE_DATE": "所选时段必须属于同一预约日期",
     "SLOTS_MUST_SHARE_BATCH": "所选时段必须属于同一放号批次",
     "BATCH_NOT_OPEN": "该批次尚未放号或已经关闭",
     "SLOT_NOT_AVAILABLE": "所选时段已被预约或不可用",
-    "DAILY_LIMIT_EXCEEDED": "每天最多预约两个小时",
-    "TIME_CONFLICT": "所选时段之间或与已有预约时间冲突",
+    "SLOT_EXPIRED": "所选时段已经开始，不能预约",
+    "DAILY_LIMIT_EXCEEDED": "每天最多预约两个时段",
+    "TIME_CONFLICT": "旧版本请求的时间冲突结果",
     "IDEMPOTENCY_CONFLICT": "同一请求编号不能提交不同的预约内容",
     "REQUEST_NOT_FOUND": "预约请求不存在",
     "BOOKING_NOT_FOUND": "预约不存在",
@@ -104,6 +105,10 @@ class SyncBookingService:
             await self._record_failure(
                 user_id, request_id, release_batch_id, requested_ids, "SLOT_NOT_AVAILABLE", now
             )
+        if any(slot.start_at <= (now or datetime.now(UTC)) for slot in slots):
+            await self._record_failure(
+                user_id, request_id, release_batch_id, requested_ids, "SLOT_EXPIRED", now
+            )
 
         usage = await self.repository.get_daily_usage(user_id, service_date)
         used_slot_count = usage.used_slot_count if usage else 0
@@ -115,12 +120,6 @@ class SyncBookingService:
                 requested_ids,
                 "DAILY_LIMIT_EXCEEDED",
                 now,
-            )
-
-        existing_items = await self.repository.list_user_items(user_id, service_date)
-        if self._has_time_conflict(slots, existing_items):
-            await self._record_failure(
-                user_id, request_id, release_batch_id, requested_ids, "TIME_CONFLICT", now
             )
 
         confirmed_at = now or datetime.now(UTC)
@@ -242,16 +241,3 @@ class SyncBookingService:
         if len(release_batch_ids) != 1:
             raise BookingRuleError("SLOTS_MUST_SHARE_BATCH")
         return next(iter(service_dates)), next(iter(release_batch_ids))
-
-    @staticmethod
-    def _has_time_conflict(slots: list[BookingSlot], existing: list[BookingItem]) -> bool:
-        periods = [(slot.start_at, slot.end_at) for slot in slots]
-        for index, (start_at, end_at) in enumerate(periods):
-            if any(
-                start_at < other_end and end_at > other_start
-                for other_start, other_end in periods[index + 1 :]
-            ):
-                return True
-            if any(start_at < item.end_at and end_at > item.start_at for item in existing):
-                return True
-        return False

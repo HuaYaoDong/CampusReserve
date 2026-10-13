@@ -137,17 +137,41 @@ async def test_sync_booking_is_idempotent_and_enforces_daily_limit() -> None:
             assert usage is not None
             assert usage.used_slot_count == 2
 
-            with pytest.raises(BookingRuleError, match="每天最多预约两个小时") as limit:
+            with pytest.raises(BookingRuleError, match="每天最多预约两个时段") as limit:
                 await service.submit(user.id, uuid4(), [slots[2].id])
             assert limit.value.code == "DAILY_LIMIT_EXCEEDED"
 
-            with pytest.raises(BookingRuleError, match="时间冲突") as overlap:
-                await service.submit(
-                    other_user.id,
-                    uuid4(),
-                    [slots[3].id, slots[4].id],
-                )
-            assert overlap.value.code == "TIME_CONFLICT"
+            parallel = await service.submit(
+                other_user.id,
+                uuid4(),
+                [slots[3].id, slots[4].id],
+            )
+            assert parallel.request.status is BookingRequestStatus.CONFIRMED
+            parallel_usage = await session.get(UserDailyUsage, (other_user.id, date(2060, 1, 2)))
+            assert parallel_usage is not None
+            assert parallel_usage.used_slot_count == 2
+        finally:
+            await transaction.rollback()
+    await engine.dispose()
+
+
+@pytest.mark.integration
+async def test_started_slot_cannot_be_confirmed() -> None:
+    engine = create_async_engine(get_settings().postgres_dsn, poolclass=NullPool)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with sessions() as session:
+        transaction = await session.begin()
+        try:
+            student = await _create_user(session, uuid4().hex[:20])
+            _, slots = await _create_inventory(session, date(2020, 1, 2), [(1, 8)])
+            service = SyncBookingService(SqlAlchemyBookingRepository(session))
+
+            with pytest.raises(BookingRuleError) as failure:
+                await service.submit(student.id, uuid4(), [slots[0].id])
+
+            assert failure.value.code == "SLOT_EXPIRED"
+            assert slots[0].status is BookingSlotStatus.AVAILABLE
         finally:
             await transaction.rollback()
     await engine.dispose()

@@ -35,7 +35,7 @@ async def test_fixed_mvp_resource_seed(database_engine: AsyncEngine) -> None:
     assert str(template.open_time) == "08:00:00"
     assert str(template.close_time) == "22:00:00"
     assert template.slot_minutes == 60
-    assert template.advance_days == 2
+    assert template.advance_days == 1
     assert str(template.release_time) == "08:00:00"
 
 
@@ -49,7 +49,6 @@ async def test_critical_database_constraints_exist(database_engine: AsyncEngine)
             ),
             {
                 "names": [
-                    "booking_item_user_time_excl",
                     "uq_booking_item_slot",
                     "ck_user_daily_usage_slot_count_between_0_and_2",
                     "ck_booking_slot_booked_requires_booking",
@@ -59,7 +58,6 @@ async def test_critical_database_constraints_exist(database_engine: AsyncEngine)
         constraints = dict(rows.all())
 
     assert constraints == {
-        "booking_item_user_time_excl": "x",
         "ck_booking_slot_booked_requires_booking": "c",
         "ck_user_daily_usage_slot_count_between_0_and_2": "c",
         "uq_booking_item_slot": "u",
@@ -95,7 +93,7 @@ async def test_database_rejects_more_than_two_daily_slots(database_engine: Async
 
 
 @pytest.mark.integration
-async def test_database_rejects_slot_oversell_and_user_time_overlap(
+async def test_database_rejects_slot_oversell_and_allows_parallel_courts(
     database_engine: AsyncEngine,
 ) -> None:
     suffix = uuid4().hex
@@ -201,9 +199,7 @@ async def test_database_rejects_slot_oversell_and_user_time_overlap(
             )
         await oversell_savepoint.rollback()
 
-        overlap_savepoint = await connection.begin_nested()
-        with pytest.raises(IntegrityError):
-            await connection.execute(
+        await connection.execute(
                 text(
                     "INSERT INTO booking_item "
                     "(booking_id, slot_id, user_id, service_date, start_at, end_at) "
@@ -218,5 +214,4 @@ async def test_database_rejects_slot_oversell_and_user_time_overlap(
                     "end_at": slots[1].end_at,
                 },
             )
-        await overlap_savepoint.rollback()
         await transaction.rollback()

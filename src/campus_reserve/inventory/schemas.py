@@ -38,7 +38,7 @@ class InventorySlotResponse(BaseModel):
     id: int
     start_at: datetime
     end_at: datetime
-    status: BookingSlotStatus | Literal["PROCESSING"]
+    status: BookingSlotStatus | Literal["PROCESSING", "EXPIRED"]
 
 
 class CourtInventoryResponse(CourtSummary):

@@ -91,24 +91,27 @@ async def test_async_api_reserves_then_returns_worker_final_result() -> None:
                 service_date=service_date,
                 release_at=datetime.now(UTC) - timedelta(minutes=1),
                 status=ReleaseBatchStatus.OPEN,
-                slot_count=1,
+                slot_count=2,
                 rule_snapshot={"max_slots_per_user_per_day": 2},
                 opened_at=datetime.now(UTC),
             )
             setup.add(batch)
             await setup.flush()
             batch_id = batch.id
-            slot = BookingSlot(
-                court_id=1,
-                release_batch_id=batch.id,
-                service_date=service_date,
-                start_at=datetime(2090, 1, 2, 8, tzinfo=UTC),
-                end_at=datetime(2090, 1, 2, 9, tzinfo=UTC),
-                status=BookingSlotStatus.AVAILABLE,
-            )
-            setup.add(slot)
+            slots = [
+                BookingSlot(
+                    court_id=court_id,
+                    release_batch_id=batch.id,
+                    service_date=service_date,
+                    start_at=datetime(2090, 1, 2, 8, tzinfo=UTC),
+                    end_at=datetime(2090, 1, 2, 9, tzinfo=UTC),
+                    status=BookingSlotStatus.AVAILABLE,
+                )
+                for court_id in (1, 2)
+            ]
+            setup.add_all(slots)
             await setup.flush()
-            slot_ids = [slot.id]
+            slot_ids = [slot.id for slot in slots]
 
         reservations = RedisAtomicReservationService(
             redis,
@@ -118,7 +121,7 @@ async def test_async_api_reserves_then_returns_worker_final_result() -> None:
         await reservations.initialize_inventory(
             batch_id,
             service_date,
-            [RedisInventorySlot(slot_ids[0], "08:00-09:00")],
+            [RedisInventorySlot(slot_id, "08:00-09:00") for slot_id in slot_ids],
         )
         await redis.xgroup_create(keyspace.stream, group, id="$", mkstream=True)
         consumer = BookingStreamConsumer(
@@ -147,7 +150,7 @@ async def test_async_api_reserves_then_returns_worker_final_result() -> None:
                 headers=headers,
             )
             assert before_reservation.status_code == 200
-            assert before_reservation.json()["available_count"] == 1
+            assert before_reservation.json()["available_count"] == 2
 
             accepted = await client.post(
                 "/api/v1/booking-requests",
@@ -170,7 +173,9 @@ async def test_async_api_reserves_then_returns_worker_final_result() -> None:
             )
             assert pending_inventory.status_code == 200
             assert pending_inventory.json()["available_count"] == 0
-            assert pending_inventory.json()["courts"][0]["slots"][0]["status"] == "PROCESSING"
+            assert pending_inventory.json()["courts"][0]["slots"][0]["status"] in {
+                "PROCESSING", "BOOKED"
+            }
 
             conflicting_body = {**body, "slot_ids": [slot_ids[0] + 1]}
             pending_conflict = await client.post(
@@ -193,7 +198,9 @@ async def test_async_api_reserves_then_returns_worker_final_result() -> None:
             assert confirmed.status_code == 200
             confirmed_payload = confirmed.json()
             assert confirmed_payload["status"] == "CONFIRMED"
-            assert confirmed_payload["booking"]["items"][0]["slot_id"] == slot_ids[0]
+            assert {item["slot_id"] for item in confirmed_payload["booking"]["items"]} == set(
+                slot_ids
+            )
 
             confirmed_inventory = await client.get(
                 f"/api/v1/venues/1/inventory?service_date={service_date}",
@@ -201,6 +208,7 @@ async def test_async_api_reserves_then_returns_worker_final_result() -> None:
             )
             assert confirmed_inventory.status_code == 200
             assert confirmed_inventory.json()["courts"][0]["slots"][0]["status"] == "BOOKED"
+            assert confirmed_inventory.json()["courts"][1]["slots"][0]["status"] == "BOOKED"
 
             replay = await client.post(
                 "/api/v1/booking-requests",

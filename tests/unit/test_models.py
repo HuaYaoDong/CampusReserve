@@ -1,5 +1,3 @@
-from sqlalchemy.dialects.postgresql import ExcludeConstraint
-
 import campus_reserve.models  # noqa: F401
 from campus_reserve.shared.database import Base
 
@@ -28,8 +26,7 @@ def test_booking_item_has_database_safety_constraints() -> None:
     constraint_names = {constraint.name for constraint in table.constraints}
 
     assert "uq_booking_item_slot" in constraint_names
-    assert "booking_item_user_time_excl" in constraint_names
-    assert any(isinstance(item, ExcludeConstraint) for item in table.constraints)
+    assert "booking_item_user_time_excl" not in constraint_names
 
 
 def test_daily_usage_has_two_slot_limit() -> None:

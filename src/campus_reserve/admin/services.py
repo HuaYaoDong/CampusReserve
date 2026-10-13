@@ -615,7 +615,8 @@ class AdminService:
     @staticmethod
     def _frozen_rules() -> dict:
         return {"max_slots_per_request": 2, "max_slots_per_user_per_day": 2,
-                "allow_non_contiguous": True, "cancellation_allowed": False}
+                "allow_non_contiguous": True, "allow_simultaneous_courts": True,
+                "cancellation_allowed": False}
 
     @staticmethod
     def _venue_data(venue: Venue) -> dict:

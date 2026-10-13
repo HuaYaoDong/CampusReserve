@@ -43,9 +43,9 @@ MVP 只覆盖一个校园场馆、15 片羽毛球场和学生用户。主链路�
 | 每日开放时间 | 08:00—22:00 |
 | 时段长度 | 60 分钟；每片场地每天生成 14 个时段，共 210 个库存时段 |
 | 放号时间 | 每天 08:00（以服务器 `Asia/Shanghai` 时间为准） |
-| 可预约日期 | 每天放号时开放未来第 2 天的库存 |
+| 可预约日期 | 每天 08:00 开放明天的库存；学生页显示今天和明天 |
 | 预约选择 | 单次可选择 1～2 个 60 分钟时段，可不连续，但必须属于同一预约日期 |
-| 用户额度 | 每名学生每天累计最多预约 2 个时段，即最多 2 小时；可以分多次提交 |
+| 用户额度 | 每名学生每天累计最多预约 2 个场地时段；可以分多次提交，同一时间的两片场地计为 2 个时段 |
 | 现场签到 | 不设置签到时间窗，只允许线下管理员在管理端手工确认 |
 | 容量目标 | 10,000 人同时抢订，峰值 5,000 RPS，0 超卖 |
 
@@ -64,11 +64,11 @@ MVP 只覆盖一个校园场馆、15 片羽毛球场和学生用户。主链路�
 
 以下规则已冻结为 MVP 验收口径，并以配置或数据库规则快照实现：
 
-1. 预约窗口：每天 08:00 开放未来第 2 天的场地。
+1. 预约窗口：每天 08:00 开放明天的场地；今天尚未开始且仍可用的时段也可预约。
 2. 开放时间与库存：唯一场馆每日 08:00—22:00 开放；15 片场地按 60 分钟生成时段。
-3. 时段选择：一次选择 1～2 个时段，必须属于同一预约日期，可以不连续；同一请求中的时段不能相互重叠。
-4. 用户额度：按预约日期累计，每名学生每天最多确认 2 个时段，即 120 分钟；允许通过一次或两次请求完成。
-5. 用户时间冲突：同一学生不能拥有时间重叠的有效预约。
+3. 时段选择：一次选择 1～2 个不同场地时段，必须属于同一使用日期，可以不连续；允许同一时间选择两片场地。
+4. 用户额度：按使用日期累计，每名学生每天最多确认 2 个场地时段；允许通过一次或两次请求完成。
+5. 并行场地：同一学生可预约同一时间的不同场地，两片场地计入每日两个时段额度。
 6. 预约确认后不可取消，库存不再回流到可预约状态。
 7. 现场签到：不设置签到窗口，只由线下管理员手工操作；学生端不提供签到入口。
 8. 幂等：同一个 `request_id` 重复提交只能产生一个结果。
@@ -161,7 +161,7 @@ MVP 只覆盖一个校园场馆、15 片羽毛球场和学生用户。主链路�
 |---|---|---|---|
 | View（视图层） | Vue 页面、组件、Pinia、表单与状态展示 | 展示场馆和库存；收集用户输入；展示排队、成功和失败结果 | 不判断最终放号状态；不计算预约额度；不直接访问数据库或 Redis |
 | Controller（控制层） | FastAPI Router、Controller、Pydantic DTO、中间件 | 接收 HTTP 请求；认证授权；参数校验；调用应用服务；把领域结果转换为 HTTP 响应 | 不编写库存扣减、预约冲突等核心业务规则；不直接提交 ORM 事务 |
-| Model（模型层） | Application Service、领域实体、值对象、策略、Repository 接口 | 执行预约、管理员现场签到、每日两小时额度和状态流转规则；维护事务边界；表达业务数据与行为 | 不依赖 Vue、HTTP、FastAPI 路由等表现层技术 |
+| Model（模型层） | Application Service、领域实体、值对象、策略、Repository 接口 | 执行预约、管理员现场签到、每日两个时段额度和状态流转规则；维护事务边界；表达业务数据与行为 | 不依赖 Vue、HTTP、FastAPI 路由等表现层技术 |
 | Infrastructure（基础设施扩展层） | SQLAlchemy Repository、Redis Adapter、Redis Streams Adapter、Auth Repository | 实现 Model 定义的数据访问和外部能力接口 | 不反向包含业务规则；不绕过 Model 修改预约状态 |
 
 ```mermaid
@@ -284,7 +284,7 @@ flowchart TB
 | HTTP 接口 | Controller | 请求解析、认证授权、DTO 校验、错误码和响应转换 | FastAPI Router、Pydantic、中间件 |
 | Worker/定时任务入口 | Controller | 消费抢订消息或触发定时任务，调用统一应用服务 | 幂等消费、Trace 透传，不复制业务规则 |
 | 身份与权限 | Model + Infrastructure | 模拟账号登录、JWT、角色和数据权限 | 密码哈希、Auth Repository、RBAC |
-| 用户与规则 | Model | 学生资料、预约日期累计两小时额度 | 原子额度计数、规则快照、领域策略、审计 |
+| 用户与规则 | Model | 学生资料、使用日期累计两个时段额度 | 原子额度计数、规则快照、领域策略、审计 |
 | 场馆资源 | Model | 场馆、场地、设施、停用状态 | 领域实体、管理用例、乐观锁 |
 | 排期库存 | Model | 开放模板、例外日、时段生成、放号批次 | 幂等生成、版本号、状态机 |
 | 库存查询 | Model + Infrastructure | 按日期读取时段状态 | Query Service、Redis Adapter、数据库兜底 |
@@ -339,7 +339,7 @@ Redis key 按放号批次和时段统一命名，例如 `reserve:batch:{batch_id
 输入：request_id、user_id、service_date、slot_ids、claim_ttl、quota_key
 1. 若 result:{request_id} 已存在，直接返回已有结果（幂等）。
 2. 检查批次状态和服务器时间，未开放则拒绝。
-3. 验证 slot_ids 数量为 1～2，属于同一 service_date，时段之间不重叠；不要求连续。
+3. 验证 slot_ids 数量为 1～2 且互不相同，属于同一 service_date；允许同一时间的不同场地。
 4. 检查用户速率、当前请求数，以及 quota:{user_id}:{service_date} 的已确认与待确认时段数。
 5. 若“已使用时段数 + 本次时段数 > 2”，返回 USER_DAILY_DURATION_EXCEEDED。
 6. 按固定顺序检查所有 slot key 是否 AVAILABLE。
@@ -358,9 +358,9 @@ Worker 对同一请求执行以下事务：
 
 1. 依据 `request_id` 幂等 upsert `booking_request`；已有终态则直接返回原结果。
 2. 锁定或创建 `(user_id, service_date)` 对应的 `user_daily_usage`，串行化同一学生同一天的并发额度更新。
-3. 验证 `used_slot_count + 本次时段数 ≤ 2`，并重新检查用户时间冲突。
+3. 验证 `used_slot_count + 本次时段数 ≤ 2`。
 4. 按 `slot_id` 升序锁定目标 `booking_slot`，避免不同组合造成死锁。
-5. 验证全部为 `AVAILABLE`、属于同一预约日期且相互不重叠，不要求连续。
+5. 验证全部为 `AVAILABLE`、属于同一使用日期；允许同一时间的不同场地。
 6. 创建 `booking`，写入 `booking_item`，并将 `user_daily_usage.used_slot_count` 增加本次时段数。
 7. 条件更新全部库存为 `BOOKED` 并绑定 `booking_id`；受影响行数不等于请求时段数则回滚。
 8. 将 `booking_request` 改为 `CONFIRMED`，与预约、库存和额度在同一事务提交。
@@ -491,7 +491,7 @@ erDiagram
 | used_slot_count | smallint | 已确认时段数，只能为 0～2 |
 | version | int | 并发更新版本 |
 
-约束：`primary key(user_id, service_date)`、`check(used_slot_count between 0 and 2)`。Worker 在确认预约前通过 `SELECT ... FOR UPDATE` 锁定该行；不存在时先幂等插入 0，再加锁更新。由于预约不可取消，计数只增加不减少，从数据库层阻止同一学生通过并发请求突破每日两小时额度。
+约束：`primary key(user_id, service_date)`、`check(used_slot_count between 0 and 2)`。Worker 在确认预约前通过 `SELECT ... FOR UPDATE` 锁定该行；不存在时先幂等插入 0，再加锁更新。由于预约不可取消，计数只增加不减少，从数据库层阻止同一学生通过并发请求突破每日两个时段额度。
 
 #### venue（场馆）
 
@@ -530,7 +530,7 @@ erDiagram
 | open_time | time | MVP 固定配置为 08:00 |
 | close_time | time | MVP 固定配置为 22:00 |
 | slot_minutes | smallint | MVP 固定配置为 60 |
-| advance_days | smallint | MVP 固定配置为 2 |
+| advance_days | smallint | MVP 固定配置为 1 |
 | release_time | time | MVP 固定配置为 08:00 |
 | valid_from/valid_to | date | 生效日期范围 |
 | rule_json | jsonb | 身份、额度等扩展规则 |
@@ -616,7 +616,7 @@ erDiagram
 | id | bigint | PK |
 | booking_id | bigint | FK → booking.id |
 | slot_id | bigint | FK → booking_slot.id |
-| user_id | bigint | FK → user.id，为数据库时间冲突约束冗余保存 |
+| user_id | bigint | FK → user.id，用于预约归属和查询 |
 | service_date | date | 预约日期 |
 | start_at/end_at | timestamptz | 预约时快照 |
 
@@ -663,20 +663,9 @@ erDiagram
 
 建议按月分区并设置不可由普通管理员删除的保留策略。
 
-### 9.3 用户时间冲突约束
+### 9.3 并行场地与数据库约束
 
-应用事务中必须检查学生已有预约是否与目标时段重叠。为强化数据库防线，`booking_item` 冗余保存 `user_id` 和时间范围，并使用 PostgreSQL 排他约束：
-
-```sql
-ALTER TABLE booking_item
-ADD CONSTRAINT booking_item_user_time_excl
-EXCLUDE USING gist (
-  user_id WITH =,
-  tstzrange(start_at, end_at, '[)') WITH &&
-);
-```
-
-需要启用 `btree_gist` 扩展。`booking_item`、`booking_slot` 和 `user_daily_usage` 必须在同一事务写入：排他约束防止同一学生同时占用两个时间重叠的场地，`unique(slot_id)` 防止场地超卖，`used_slot_count ≤ 2` 防止每日超过两小时。
+同一学生允许预约同一时间的两片不同场地。`booking_item` 保留 `user_id` 和时间快照用于查询，但不设置用户时间排他约束。`booking_item`、`booking_slot` 和 `user_daily_usage` 在同一事务写入：`unique(slot_id)` 防止同一场地时段超卖，`used_slot_count ≤ 2` 防止学生每日超过两个时段。
 
 ## 10. 用例设计
 
@@ -722,7 +711,7 @@ flowchart LR
 | 触发 | 用户确认场地和时段后点击“立即预约” |
 | 主流程 | 客户端生成 request_id → 服务端校验 → Redis 原子占位 → 写入消息流 → 返回 PENDING → Worker 事务落库 → 用户查询最终结果 |
 | 成功后置 | 预约为 CONFIRMED；库存为 BOOKED；每日用量和状态历史已写入 |
-| 备选流程 | 未放号、无库存、超额度、时间冲突、重复请求、队列已满，返回稳定错误码和可读提示 |
+| 备选流程 | 未放号、无库存、超额度、重复请求、队列已满，返回稳定错误码和可读提示 |
 | 一致性要求 | 同一 request_id 只有一个结果；一次选择的所有时段全成或全败；每日累计不超过 2 个时段；不得超卖 |
 
 ### 10.3 核心用例说明：管理员现场签到
@@ -823,7 +812,7 @@ sequenceDiagram
     DB-->>W2: 获得行锁，used_slot_count=2
     W2->>DB: 记录 USER_DAILY_DURATION_EXCEEDED
     W2->>R: 补偿 request-B 的临时占位
-    Note over W1,R: 最终只增加 1 个时段，当天累计保持 2 小时
+    Note over W1,R: 最终只增加 1 个时段，当天累计保持 2 个时段
 ```
 
 ### 11.4 场景四：落库失败与补偿
@@ -902,7 +891,7 @@ sequenceDiagram
 
 `slot_ids` 长度只能为 1 或 2，必须属于同一预约日期，可以不连续；服务端不能依赖前端完成此项校验。
 
-失败码建议稳定枚举：`BATCH_NOT_OPEN`、`SLOT_UNAVAILABLE`、`USER_DAILY_DURATION_EXCEEDED`、`USER_TIME_CONFLICT`、`INVALID_SLOT_SELECTION`、`TOO_MANY_REQUESTS`、`QUEUE_FULL`、`SYSTEM_BUSY`。
+失败码建议稳定枚举：`BATCH_NOT_OPEN`、`SLOT_UNAVAILABLE`、`USER_DAILY_DURATION_EXCEEDED`、`INVALID_SLOT_SELECTION`、`TOO_MANY_REQUESTS`、`QUEUE_FULL`、`SYSTEM_BUSY`。
 
 ### 12.2 管理端 API
 
@@ -969,7 +958,7 @@ CampusReserve/
 │  │  ├─ domain/              # M：纯 Python 业务模型
 │  │  │  ├─ entities.py       # Booking、BookingSlot 等实体
 │  │  │  ├─ value_objects.py
-│  │  │  ├─ policies.py       # 每日两小时额度、时段选择与冲突规则
+│  │  │  ├─ policies.py       # 每日两个时段额度、时段选择与库存规则
 │  │  │  └─ events.py
 │  │  ├─ repositories.py      # M：Repository/缓存/MQ 抽象接口
 │  │  └─ infrastructure/      # Infrastructure：接口实现
@@ -1047,7 +1036,7 @@ bookings/infrastructure/message_queue_adapter.py# Infrastructure：持久化抢�
 
 - 登录、权限边界、唯一场馆资料维护、固定场地资料维护和开放模板配置。
 - 验证初始化数据恰好为 1 个场馆、15 片场地，每天 08:00—22:00 共生成 210 个 60 分钟库存时段。
-- 验证每天 08:00 只开放未来第 2 天的库存。
+- 验证每天 08:00 开放明天的库存。
 - 时段跨日期和例外日期边界。
 - 同一请求选择两个不连续时段时，两个时段全成功或全失败。
 - 每名学生同一服务日期累计最多确认 2 个时段，可由一个双时段请求或两个单时段请求组成。
@@ -1055,7 +1044,7 @@ bookings/infrastructure/message_queue_adapter.py# Infrastructure：持久化抢�
 - 只有管理员可执行现场签到，签到不校验时间窗、允许结束后补录且重复提交幂等。
 - 相同 `request_id` 并发提交 100 次只生成一个预约结果。
 - 1,000 用户争抢同一时段最终只确认 1 单。
-- 用户抢不同场地但时间重叠时最多确认 1 单。
+- 同一学生可在同一时间确认两片不同场地，累计占用两个每日额度。
 - Worker 消费重复、乱序、崩溃重启后结果正确。
 - 数据库事务成功但更新 Redis 失败，可由对账任务修复。
 
@@ -1110,10 +1099,10 @@ bookings/infrastructure/message_queue_adapter.py# Infrastructure：持久化抢�
 | 第 1 周 | 冻结需求、页面草图、ER 与 MVC 目录 | 需求基线、架构图、可启动仓库 |
 | 第 2 周 | Docker Compose、FastAPI、Vue、PostgreSQL、Redis 工程底座 | 一键启动；模拟学生/管理员登录；Alembic 迁移 |
 | 第 3 周 | 场馆、15 片场地、开放模板、时段生成和 08:00 放号 | 210 个日库存可重复生成且不重复 |
-| 第 4 周 | 库存查询、预约页面、管理端基础页面 | 可查询未来第 2 天并选择 1～2 个时段 |
+| 第 4 周 | 库存查询、预约页面、管理端基础页面 | 可查询今天和明天并选择 1～2 个时段 |
 | 第 5 周 | Redis Lua 原子占位、幂等和基础限流 | 两个不连续时段全成或全败 |
 | 第 6 周 | Redis Streams、Booking Worker、数据库最终确认 | API 返回 PENDING，Worker 异步确认结果 |
-| 第 7 周 | 每日两小时额度、时间冲突、失败补偿和对账 | 并发请求不能突破 2 小时，失败占位可恢复 |
+| 第 7 周 | 每日两个时段额度、失败补偿和对账 | 并发请求不能突破 2 个时段，失败占位可恢复 |
 | 第 8 周 | 我的预约、管理员现场签到、审计 | MVP 功能链路完整 |
 | 第 9 周 | 单元/集成测试、前后端联调和异常提示 | 核心自动化测试通过 |
 | 第 10 周 | Locust 压测、热点库存竞争和性能优化 | 5,000 RPS 测试报告、0 超卖证据 |
@@ -1139,7 +1128,7 @@ bookings/infrastructure/message_queue_adapter.py# Infrastructure：持久化抢�
 - 用户范围：学生。
 - 资源范围：1 个场馆、15 片羽毛球场。
 - 每日 08:00—22:00 开放，每个时段 60 分钟。
-- 每天 08:00 开放未来第 2 天库存。
+- 每天 08:00 开放明天的库存。
 - 单次可选同一日期内 1～2 个时段，时段可以不连续。
 - 每名学生每天累计最多确认 2 个时段，可以分多次提交。
 - 预约一经确认即保持有效，库存不回流。

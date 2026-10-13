@@ -78,10 +78,8 @@ async def get_inventory(
     if configuration is None:
         raise _not_found("场馆不存在或未开放")
     venue, template, _ = configuration
-    requested_date = service_date or (
-        datetime.now(ZoneInfo(venue.timezone)).date()
-        + timedelta(days=template.advance_days)
-    )
+    current_time = datetime.now(ZoneInfo(venue.timezone))
+    requested_date = service_date or current_time.date() + timedelta(days=template.advance_days)
 
     try:
         view = await service.get_inventory(venue_id, requested_date)
@@ -89,9 +87,7 @@ async def get_inventory(
         raise _not_found(str(exc)) from exc
 
     redis_slots: dict[str, str] | None = None
-    if view.batch.status is ReleaseBatchStatus.OPEN and requested_date >= datetime.now(
-        ZoneInfo(venue.timezone)
-    ).date():
+    if view.batch.status is ReleaseBatchStatus.OPEN and requested_date >= current_time.date():
         try:
             redis_slots = await get_redis().hgetall(
                 RedisReservationKeyspace().slots(view.batch.id)
@@ -110,6 +106,8 @@ async def get_inventory(
             slot.status,
             redis_slots.get(str(slot.id)) if redis_slots is not None else None,
             redis_slots is not None,
+            slot.start_at,
+            current_time,
         )
         slots_by_court[court.id].append(
             InventorySlotResponse(
@@ -149,7 +147,11 @@ def _visible_slot_status(
     database_status: BookingSlotStatus,
     redis_status: str | None,
     redis_active: bool,
-) -> BookingSlotStatus | Literal["PROCESSING"]:
+    start_at: datetime,
+    current_time: datetime,
+) -> BookingSlotStatus | Literal["PROCESSING", "EXPIRED"]:
+    if database_status is BookingSlotStatus.AVAILABLE and start_at <= current_time:
+        return "EXPIRED"
     if database_status is not BookingSlotStatus.AVAILABLE or not redis_active:
         return database_status
     if redis_status == "AVAILABLE":

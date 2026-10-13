@@ -162,23 +162,18 @@ async def test_confirmed_database_usage_is_counted_with_pending_reservations() -
             [RedisConfirmedUsage(user_id=1, period_tokens=("08:00-09:00",))],
         )
 
-        pending = await service.reserve(command(slot_ids=(2,)))
+        parallel_to_confirmed = await service.reserve(command(slot_ids=(4,)))
         over_limit = await service.reserve(command(slot_ids=(3,)))
-        confirmed_period_conflict = await service.reserve(command(slot_ids=(4,)))
 
-        assert pending.code is RedisReservationCode.RESERVED
-        assert pending.used_slot_count == 2
+        assert parallel_to_confirmed.code is RedisReservationCode.RESERVED
+        assert parallel_to_confirmed.used_slot_count == 2
         assert over_limit.code is RedisReservationCode.DAILY_LIMIT_EXCEEDED
-        assert confirmed_period_conflict.code is RedisReservationCode.TIME_CONFLICT
         assert await redis.get(keys.usage(100, 1)) == "2"
-        assert await redis.smembers(keys.user_periods(100, 1)) == {
-            "08:00-09:00",
-            "10:00-11:00",
-        }
+        assert (await redis.hget(keys.slots(100), "4")).startswith("RESERVED:")
 
 
 @pytest.mark.integration
-async def test_same_period_cannot_be_reserved_twice_by_one_user() -> None:
+async def test_same_period_can_be_reserved_on_two_courts_by_one_user() -> None:
     async with isolated_service() as (redis, service, keys):
         await service.initialize_inventory(
             100,
@@ -187,18 +182,20 @@ async def test_same_period_cannot_be_reserved_twice_by_one_user() -> None:
                 RedisInventorySlot(1, "08:00-09:00"),
                 RedisInventorySlot(2, "08:00-09:00"),
                 RedisInventorySlot(3, "09:00-10:00"),
+                RedisInventorySlot(4, "09:00-10:00"),
             ],
         )
 
         same_request = await service.reserve(command(slot_ids=(1, 2)))
-        first = await service.reserve(command(slot_ids=(1,)))
-        later_conflict = await service.reserve(command(slot_ids=(2,)))
+        first = await service.reserve(command(user_id=2, slot_ids=(3,)))
+        later_parallel = await service.reserve(command(user_id=2, slot_ids=(4,)))
 
-        assert same_request.code is RedisReservationCode.TIME_CONFLICT
+        assert same_request.code is RedisReservationCode.RESERVED
+        assert same_request.used_slot_count == 2
         assert first.code is RedisReservationCode.RESERVED
-        assert later_conflict.code is RedisReservationCode.TIME_CONFLICT
-        assert await redis.hget(keys.slots(100), "2") == "AVAILABLE"
-        assert await redis.xlen(keys.stream) == 1
+        assert later_parallel.code is RedisReservationCode.RESERVED
+        assert later_parallel.used_slot_count == 2
+        assert await redis.xlen(keys.stream) == 3
 
 
 @pytest.mark.integration

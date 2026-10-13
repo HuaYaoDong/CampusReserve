@@ -73,7 +73,6 @@ if slot_count < 1 or slot_count > 2 then
 end
 
 local slot_ids = {}
-local requested_periods = {}
 for index = 1, slot_count do
     local slot_id = ARGV[8 + index]
     if slot_ids[slot_id] then
@@ -89,11 +88,6 @@ for index = 1, slot_count do
     if slot_state ~= "AVAILABLE" then
         return remember_failure("SLOT_NOT_AVAILABLE")
     end
-    if requested_periods[period_token]
-        or redis.call("SISMEMBER", KEYS[4], period_token) == 1 then
-        return remember_failure("TIME_CONFLICT")
-    end
-    requested_periods[period_token] = true
 end
 
 if current_usage + slot_count > max_daily_slots then

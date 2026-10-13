@@ -1,4 +1,5 @@
 from datetime import date, datetime, time
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -37,7 +38,7 @@ class InventorySlotResponse(BaseModel):
     id: int
     start_at: datetime
     end_at: datetime
-    status: BookingSlotStatus
+    status: BookingSlotStatus | Literal["PROCESSING"]
 
 
 class CourtInventoryResponse(CourtSummary):

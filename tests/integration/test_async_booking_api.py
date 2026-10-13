@@ -142,6 +142,13 @@ async def test_async_api_reserves_then_returns_worker_final_result() -> None:
         }
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
+            before_reservation = await client.get(
+                f"/api/v1/venues/1/inventory?service_date={service_date}",
+                headers=headers,
+            )
+            assert before_reservation.status_code == 200
+            assert before_reservation.json()["available_count"] == 1
+
             accepted = await client.post(
                 "/api/v1/booking-requests",
                 headers=headers,
@@ -156,6 +163,14 @@ async def test_async_api_reserves_then_returns_worker_final_result() -> None:
             )
             assert processing.status_code == 200
             assert processing.json()["status"] == "PROCESSING"
+
+            pending_inventory = await client.get(
+                f"/api/v1/venues/1/inventory?service_date={service_date}",
+                headers=headers,
+            )
+            assert pending_inventory.status_code == 200
+            assert pending_inventory.json()["available_count"] == 0
+            assert pending_inventory.json()["courts"][0]["slots"][0]["status"] == "PROCESSING"
 
             conflicting_body = {**body, "slot_ids": [slot_ids[0] + 1]}
             pending_conflict = await client.post(
@@ -179,6 +194,13 @@ async def test_async_api_reserves_then_returns_worker_final_result() -> None:
             confirmed_payload = confirmed.json()
             assert confirmed_payload["status"] == "CONFIRMED"
             assert confirmed_payload["booking"]["items"][0]["slot_id"] == slot_ids[0]
+
+            confirmed_inventory = await client.get(
+                f"/api/v1/venues/1/inventory?service_date={service_date}",
+                headers=headers,
+            )
+            assert confirmed_inventory.status_code == 200
+            assert confirmed_inventory.json()["courts"][0]["slots"][0]["status"] == "BOOKED"
 
             replay = await client.post(
                 "/api/v1/booking-requests",

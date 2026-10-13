@@ -1,11 +1,13 @@
 from datetime import date, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from campus_reserve.auth.dependencies import CurrentPrincipal
+from campus_reserve.bookings.services.redis_reservation import RedisReservationKeyspace
 from campus_reserve.inventory.infrastructure.sqlalchemy_repository import (
     SqlAlchemyInventoryRepository,
 )
@@ -19,6 +21,7 @@ from campus_reserve.inventory.schemas import (
 from campus_reserve.inventory.services.inventory import InventoryNotFoundError, InventoryService
 from campus_reserve.shared.database import get_session
 from campus_reserve.shared.enums import BookingSlotStatus, ReleaseBatchStatus
+from campus_reserve.shared.redis import get_redis
 
 router = APIRouter()
 DatabaseSession = Annotated[AsyncSession, Depends(get_session)]
@@ -85,20 +88,38 @@ async def get_inventory(
     except InventoryNotFoundError as exc:
         raise _not_found(str(exc)) from exc
 
+    redis_slots: dict[str, str] | None = None
+    if view.batch.status is ReleaseBatchStatus.OPEN and requested_date >= datetime.now(
+        ZoneInfo(venue.timezone)
+    ).date():
+        try:
+            redis_slots = await get_redis().hgetall(
+                RedisReservationKeyspace().slots(view.batch.id)
+            )
+        except RedisError as exc:
+            raise _inventory_unavailable() from exc
+        if not redis_slots:
+            raise _inventory_unavailable()
+
     slots_by_court: dict[int, list[InventorySlotResponse]] = {
         court.id: [] for court in view.courts
     }
     available_count = 0
     for slot, court in view.slot_rows:
+        visible_status = _visible_slot_status(
+            slot.status,
+            redis_slots.get(str(slot.id)) if redis_slots is not None else None,
+            redis_slots is not None,
+        )
         slots_by_court[court.id].append(
             InventorySlotResponse(
                 id=slot.id,
                 start_at=slot.start_at,
                 end_at=slot.end_at,
-                status=slot.status,
+                status=visible_status,
             )
         )
-        if slot.status is BookingSlotStatus.AVAILABLE:
+        if visible_status is BookingSlotStatus.AVAILABLE:
             available_count += 1
 
     return InventoryResponse(
@@ -121,6 +142,29 @@ async def get_inventory(
             )
             for court in view.courts
         ],
+    )
+
+
+def _visible_slot_status(
+    database_status: BookingSlotStatus,
+    redis_status: str | None,
+    redis_active: bool,
+) -> BookingSlotStatus | Literal["PROCESSING"]:
+    if database_status is not BookingSlotStatus.AVAILABLE or not redis_active:
+        return database_status
+    if redis_status == "AVAILABLE":
+        return BookingSlotStatus.AVAILABLE
+    if redis_status and redis_status.startswith("RESERVED:"):
+        return "PROCESSING"
+    if redis_status == "BOOKED":
+        return BookingSlotStatus.BOOKED
+    return BookingSlotStatus.BLOCKED
+
+
+def _inventory_unavailable() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={"code": "INVENTORY_UNAVAILABLE", "message": "预约库存暂不可用，请稍后刷新"},
     )
 
 

@@ -1,3 +1,5 @@
+"""HTTP 服务入口：装配各业务路由、错误处理、健康指标和启动关闭钩子。"""
+
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -23,6 +25,7 @@ configure_logging(settings.log_level)
 logger = get_logger(__name__)
 
 
+# 进程退出时关闭共享 Redis 和数据库连接，避免测试及重启时泄漏连接。
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     logger.info("api_started", extra={"app_env": settings.app_env})

@@ -1,3 +1,5 @@
+"""从环境变量读取 API、数据库、Redis、JWT 和 Worker 参数。"""
+
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict

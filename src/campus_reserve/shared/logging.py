@@ -1,3 +1,5 @@
+"""统一配置结构化日志，供三个运行进程复用。"""
+
 import json
 import logging
 from datetime import UTC, datetime

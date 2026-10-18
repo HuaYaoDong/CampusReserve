@@ -1,4 +1,6 @@
-"""Import every ORM model so Alembic sees one complete metadata graph."""
+"""Import every ORM model so Alembic sees one complete metadata graph.
+
+集中导入 ORM 模型，让 Alembic 能看到完整元数据关系。"""
 
 from campus_reserve.admin.models import AuditLog
 from campus_reserve.bookings.models import Booking, BookingItem, BookingRequest, BookingStatusLog

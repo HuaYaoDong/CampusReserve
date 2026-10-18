@@ -1,3 +1,5 @@
+"""ORM 模型导入及基础元数据单元测试。"""
+
 import campus_reserve.models  # noqa: F401
 from campus_reserve.shared.database import Base
 

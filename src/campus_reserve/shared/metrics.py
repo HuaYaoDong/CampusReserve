@@ -1,3 +1,5 @@
+"""Prometheus 请求指标中间件与 /metrics 导出入口。"""
+
 from time import perf_counter
 from typing import Any
 

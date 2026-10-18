@@ -1,3 +1,5 @@
+"""Stream Worker 集成测试：重试、补偿、死信和提交后确认窗口。"""
+
 from datetime import UTC, date, datetime, timedelta
 from uuid import UUID, uuid4
 

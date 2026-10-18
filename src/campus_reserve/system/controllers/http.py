@@ -1,3 +1,5 @@
+"""健康接口：汇总数据库和 Redis 可用性。"""
+
 from fastapi import APIRouter, Response, status
 
 from campus_reserve.system.schemas.health import HealthResponse, LiveResponse

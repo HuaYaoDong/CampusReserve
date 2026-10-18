@@ -2,7 +2,9 @@
 
 Revision ID: 0005_inventory_idempotency
 Revises: 0004_demo_accounts
-"""
+
+
+确保同一场馆和使用日期只生成一个库存批次。"""
 
 from alembic import op
 

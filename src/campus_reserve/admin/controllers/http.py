@@ -1,3 +1,5 @@
+"""管理接口：校验角色和输入，调用管理服务并映射业务错误。"""
+
 from collections.abc import AsyncIterator
 from datetime import date
 from typing import Annotated

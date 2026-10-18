@@ -1,3 +1,5 @@
+"""预约请求、预约主记录、场地时段明细和状态历史实体。"""
+
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -33,6 +35,7 @@ if TYPE_CHECKING:
     from campus_reserve.venues.models import Venue
 
 
+# 数据库确认后的预约主记录；业务编号与使用日期不要混淆。
 class Booking(TimestampMixin, Base):
     __tablename__ = "booking"
     __table_args__ = (
@@ -77,6 +80,7 @@ class Booking(TimestampMixin, Base):
     )
 
 
+# 客户端 UUID 对应的幂等请求，可处于处理中、确认或失败。
 class BookingRequest(TimestampMixin, Base):
     __tablename__ = "booking_request"
     __table_args__ = (
@@ -124,6 +128,7 @@ class BookingRequest(TimestampMixin, Base):
     booking: Mapped[Booking | None] = relationship(back_populates="request")
 
 
+# 预约明细绑定具体库存时段，唯一约束承担最终防重复占用。
 class BookingItem(TimestampMixin, Base):
     __tablename__ = "booking_item"
     __table_args__ = (
@@ -155,6 +160,7 @@ class BookingItem(TimestampMixin, Base):
     user: Mapped["User"] = relationship(back_populates="booking_items")
 
 
+# 记录预约状态变更和操作者，供审计与问题排查。
 class BookingStatusLog(TimestampMixin, Base):
     __tablename__ = "booking_status_log"
     __table_args__ = (

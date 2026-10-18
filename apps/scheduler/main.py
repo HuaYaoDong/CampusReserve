@@ -1,3 +1,5 @@
+"""周期任务入口：补齐今天/明天库存、同步 Redis，并归档已结束预约。"""
+
 import asyncio
 import os
 import signal
@@ -34,18 +36,20 @@ settings = get_settings()
 configure_logging(settings.log_level)
 logger = get_logger(__name__)
 
-
+# 写入心跳，30 秒过期，保证调度器存活时 Redis 中有心跳键。
 async def write_heartbeat() -> None:
     instance = os.getenv("SCHEDULER_INSTANCE", socket.gethostname())
     await get_redis().setex(f"campus-reserve:scheduler:{instance}:heartbeat", 30, "ok")
 
 
+# 同时检查今天和明天，保证当天剩余时段与次日放号都能被补齐。
 async def synchronize_inventory() -> None:
     now = datetime.now(ZoneInfo(settings.timezone))
     for service_date in (now.date(), None):
         await _synchronize_inventory_for_date(now, service_date)
 
 
+# 数据库批次是事实来源；同步到 Redis 时必须保持可重试。
 async def _synchronize_inventory_for_date(now: datetime, service_date: date | None) -> None:
     try:
         async with async_session_factory() as session, session.begin():
@@ -100,6 +104,7 @@ async def _synchronize_inventory_for_date(now: datetime, service_date: date | No
         logger.exception("inventory_synchronization_failed")
 
 
+# 根据时段结束时间归档预约，不改变已记录的签到事实。
 async def complete_finished_bookings() -> None:
     try:
         async with async_session_factory() as session, session.begin():

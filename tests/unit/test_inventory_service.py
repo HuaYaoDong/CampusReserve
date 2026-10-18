@@ -1,3 +1,5 @@
+"""时段窗口计算的单元测试。"""
+
 from datetime import date, time
 
 from campus_reserve.inventory.services.inventory import build_slot_windows

@@ -1,3 +1,5 @@
+"""跨模块共用的身份、批次、库存、预约和签到状态枚举。"""
+
 from enum import StrEnum
 from typing import Any
 

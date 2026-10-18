@@ -1,3 +1,5 @@
+"""认证仓储协议，供服务层依赖而不绑定具体数据库实现。"""
+
 from typing import Protocol
 
 from campus_reserve.users.models import User

@@ -1,3 +1,5 @@
+"""认证接口：验证账号并返回令牌；当前用户接口读取身份。"""
+
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status

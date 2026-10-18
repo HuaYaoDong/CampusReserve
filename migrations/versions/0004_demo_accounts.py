@@ -2,7 +2,9 @@
 
 Revision ID: 0004_demo_accounts
 Revises: 0003_constraint_names
-"""
+
+
+写入课程演示账号；数据库只保存密码哈希。"""
 
 from alembic import op
 

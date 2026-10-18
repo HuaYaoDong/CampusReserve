@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// 管理端集中处理场馆、规则、库存批次、签到与审计；权限以服务端为准。
 import { computed, onMounted, reactive, ref } from "vue";
 
 type Role = "STUDENT" | "VENUE_ADMIN" | "PLATFORM_ADMIN";
@@ -35,6 +36,7 @@ const isPlatform = computed(() => props.user.role === "PLATFORM_ADMIN");
 const openCount = computed(() => overview.value?.batches.filter((item) => item.status === "OPEN").length ?? 0);
 
 async function api<T>(path: string, method = "GET", body?: unknown): Promise<T> {
+  // 统一附加令牌并解析业务错误，避免每个管理表单重复处理鉴权。
   const response = await fetch(`/api/v1/admin${path}`, {
     method,
     headers: { Authorization: `Bearer ${props.token}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
@@ -53,6 +55,7 @@ async function api<T>(path: string, method = "GET", body?: unknown): Promise<T> 
 }
 
 async function run(label: string, action: () => Promise<void>) {
+  // 所有写操作共用忙碌、成功和失败提示，成功后由调用方刷新数据。
   busy.value = label;
   message.value = "";
   error.value = "";
@@ -120,6 +123,7 @@ function setTemplateStatus(item: Template, status: string) {
 }
 
 function saveException() {
+  // 例外日期可能作用于整个场馆或单片场地，最终限制交给后端校验。
   void run("保存例外日期", async () => {
     await api("/calendar-exceptions", "PUT", {
       exception_date: exceptionForm.exception_date,
@@ -134,6 +138,7 @@ function saveException() {
 }
 
 function generate(previewOnly: boolean) {
+  // 预览不持久化；正式生成后应检查批次状态再执行发布与放号。
   void run(previewOnly ? "预览库存" : "生成库存", async () => {
     preview.value = await api<Preview>("/slot-generation-jobs", "POST", { service_date: generationDate.value, preview_only: previewOnly });
     if (!previewOnly) await loadOverview();
@@ -141,6 +146,7 @@ function generate(previewOnly: boolean) {
 }
 
 function batchAction(batch: Batch, action: string) {
+  // 暂停、恢复、关闭会影响 Redis 预约入口，不只是更新表格文字。
   const labels: Record<string, string> = { publish: "发布", open: "放号", pause: "暂停", resume: "恢复", close: "关闭" };
   const label = action === "open" && batch.status === "OPEN" ? "同步库存" : labels[action] ?? action;
   if (action === "close" && !window.confirm(`确认关闭 ${batch.service_date} 的批次？`)) return;
@@ -159,6 +165,7 @@ function searchBookings() {
 }
 
 function checkIn(booking: Booking) {
+  // 到场签到由管理员执行；服务端负责幂等和状态历史。
   void run("现场签到", async () => {
     await api(`/bookings/${booking.id}/check-in`, "POST", { note: checkInNote.value || null });
     const query = new URLSearchParams();

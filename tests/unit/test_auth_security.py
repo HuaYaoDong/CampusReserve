@@ -1,3 +1,5 @@
+"""认证单元测试：密码哈希与 JWT 签名校验。"""
+
 import pytest
 
 from campus_reserve.auth.security import (

@@ -1,3 +1,6 @@
+-- 预约原子入口。KEYS: 库存、批次时段、用户额度、用户时段、请求结果、事件流。
+-- 先校验再写入；脚本调用不可被其他预约命令交错执行。
+-- 统一读取 Redis 键类型，供占位前的状态校验使用。
 local function key_type(key)
     local result = redis.call("TYPE", key)
     if type(result) == "table" then
@@ -30,6 +33,7 @@ end
 
 local current_usage = tonumber(redis.call("GET", KEYS[3]) or "0")
 local stored_fingerprint = redis.call("HGET", KEYS[5], "fingerprint")
+-- 同 UUID 同内容直接重放旧结果；内容变化必须拒绝，不能再次扣库存。
 if stored_fingerprint then
     if stored_fingerprint ~= fingerprint then
         return {"IDEMPOTENCY_CONFLICT", "1", tostring(current_usage), ""}
@@ -42,6 +46,7 @@ if stored_fingerprint then
     }
 end
 
+-- 记录确定性失败，便于同一请求 UUID 重试时返回同一结果。
 local function remember_failure(code)
     redis.call(
         "HSET",
@@ -64,6 +69,7 @@ if redis.call("HGET", KEYS[2], "__service_date") ~= service_date then
     return remember_failure("BATCH_DATE_MISMATCH")
 end
 local batch_status = redis.call("HGET", KEYS[2], "__batch_status")
+-- 管理员暂停或关闭批次后，Redis 门闩立即阻止新请求。
 if batch_status and batch_status ~= "OPEN" then
     return remember_failure("BATCH_NOT_OPEN")
 end
@@ -90,11 +96,13 @@ for index = 1, slot_count do
     end
 end
 
+-- 同一时间的两片不同场地可以订，但两片都计入每日额度。
 if current_usage + slot_count > max_daily_slots then
     return remember_failure("DAILY_LIMIT_EXCEEDED")
 end
 
 local joined_slot_ids = table.concat(ARGV, ",", 9, 8 + slot_count)
+-- 事件和库存变化在 Redis 一次脚本调用中完成，Worker 再负责数据库确认。
 local stream_id = redis.call(
     "XADD",
     KEYS[6],

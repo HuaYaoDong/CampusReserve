@@ -2,7 +2,9 @@
 
 Revision ID: 0006_next_day_parallel
 Revises: 0005_inventory_idempotency
-"""
+
+
+把预约提前天数改为一天，并允许同一用户同时预约不同场地。"""
 
 from alembic import op
 
@@ -12,6 +14,7 @@ branch_labels = None
 depends_on = None
 
 
+# 先移除同时间跨场地限制，再把模板提前天数调整为一天。
 def upgrade() -> None:
     op.execute("ALTER TABLE booking_item DROP CONSTRAINT booking_item_user_time_excl")
     op.execute(

@@ -1,3 +1,5 @@
+"""管理审计实体，记录操作者、资源和操作前后状态。"""
+
 from typing import Any
 
 from sqlalchemy import BigInteger, CheckConstraint, ForeignKey, Index, String
@@ -8,6 +10,7 @@ from campus_reserve.shared.database import Base, TimestampMixin
 from campus_reserve.shared.enums import UserRole, enum_type
 
 
+# 管理操作审计日志，保存被操作资源和前后状态。
 class AuditLog(TimestampMixin, Base):
     __tablename__ = "audit_log"
     __table_args__ = (

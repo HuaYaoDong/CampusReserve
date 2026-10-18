@@ -1,3 +1,5 @@
+"""库存查询接口：组合数据库时段和 Redis 实时占位状态。"""
+
 from datetime import date, datetime, timedelta
 from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
@@ -65,6 +67,7 @@ async def list_venues(
     ]
 
 
+# 数据库给出基础时段，Redis 给出处理中的实时占位。
 @router.get("/{venue_id}/inventory", response_model=InventoryResponse)
 async def get_inventory(
     venue_id: int,
@@ -143,6 +146,7 @@ async def get_inventory(
     )
 
 
+# 今天已开始的时段仍展示：订出显示已预约，否则显示已过期。
 def _visible_slot_status(
     database_status: BookingSlotStatus,
     redis_status: str | None,

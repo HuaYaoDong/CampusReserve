@@ -1,3 +1,5 @@
+"""登录请求、令牌和用户资料的 API 数据结构。"""
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from campus_reserve.shared.enums import UserRole

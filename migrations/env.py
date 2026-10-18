@@ -1,3 +1,5 @@
+"""Alembic 运行环境：导入完整 ORM 元数据并创建迁移连接。"""
+
 import asyncio
 from logging.config import fileConfig
 

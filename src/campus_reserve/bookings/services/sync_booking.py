@@ -1,3 +1,5 @@
+"""数据库预约基线：事务内校验时段、用户额度、幂等请求和防超卖约束。"""
+
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from uuid import UUID
@@ -46,6 +48,7 @@ class BookingRuleError(ValueError):
         replayed: bool = False,
         request: BookingRequest | None = None,
     ) -> None:
+        """保存业务错误码、是否重放及已有请求，供上层生成错误响应。"""
         self.code = code
         self.replayed = replayed
         self.request = request
@@ -60,8 +63,10 @@ class BookingSubmission:
 
 class SyncBookingService:
     def __init__(self, repository: BookingRepository) -> None:
+        """注入预约仓储，使业务规则与数据库实现分离。"""
         self.repository = repository
 
+    # 事务中锁定请求、用量和库存；数据库约束是最终防超卖保护。
     async def submit(
         self,
         user_id: int,
@@ -69,6 +74,7 @@ class SyncBookingService:
         slot_ids: list[int],
         now: datetime | None = None,
     ) -> BookingSubmission:
+        """事务内完成幂等、日期批次、库存、时间及每日额度校验，并创建正式预约。"""
         requested_ids = sorted(slot_ids)
         if not 1 <= len(requested_ids) <= 2:
             raise BookingRuleError("INVALID_SLOT_COUNT")
@@ -192,20 +198,24 @@ class SyncBookingService:
         return BookingSubmission(persisted, replayed=False)
 
     async def get_request(self, user_id: int, request_id: UUID) -> BookingRequest:
+        """仅按所属学生读取请求编号对应的数据库结果。"""
         request = await self.repository.get_request(request_id)
         if request is None or request.user_id != user_id:
             raise BookingRuleError("REQUEST_NOT_FOUND")
         return request
 
     async def list_bookings(self, user_id: int) -> list[Booking]:
+        """列出指定学生已经保存到数据库的预约。"""
         return await self.repository.list_user_bookings(user_id)
 
     async def get_booking(self, user_id: int, booking_id: int) -> Booking:
+        """读取学生本人的预约详情，不存在或不属于本人时抛出业务错误。"""
         booking = await self.repository.get_user_booking(user_id, booking_id)
         if booking is None:
             raise BookingRuleError("BOOKING_NOT_FOUND")
         return booking
 
+    # 把可确定的失败写入请求记录，供客户端用原 UUID 重查。
     async def _record_failure(
         self,
         user_id: int,
@@ -215,6 +225,7 @@ class SyncBookingService:
         error_code: str,
         now: datetime | None,
     ) -> None:
+        """保存可确定的失败请求及错误码，供客户端用原 UUID 查询。"""
         failed_at = now or datetime.now(UTC)
         request = BookingRequest(
             request_id=request_id,
@@ -228,10 +239,12 @@ class SyncBookingService:
         await self.repository.add_request(request)
         raise BookingRuleError(error_code, request=request)
 
+    # 单次 1～2 个同日同批次时段；允许同时间不同场地。
     @staticmethod
     def _validate_slot_shape(
         slots: list[BookingSlot], requested_ids: list[int]
     ) -> tuple[date, int]:
+        """检查所选时段存在且属于同一使用日期和同一放号批次。"""
         if len(slots) != len(requested_ids):
             raise BookingRuleError("SLOTS_NOT_FOUND")
         service_dates = {slot.service_date for slot in slots}

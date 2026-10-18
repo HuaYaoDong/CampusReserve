@@ -1,3 +1,5 @@
+"""SQLAlchemy 异步引擎、会话依赖及数据库健康检查。"""
+
 from collections.abc import AsyncIterator
 from datetime import datetime
 

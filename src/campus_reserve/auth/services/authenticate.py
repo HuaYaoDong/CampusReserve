@@ -1,3 +1,5 @@
+"""登录服务：查找用户、检查密码和状态，再签发访问令牌。"""
+
 from campus_reserve.auth.repositories import UserRepository
 from campus_reserve.auth.security import DUMMY_PASSWORD_HASH, verify_password
 from campus_reserve.shared.enums import UserStatus

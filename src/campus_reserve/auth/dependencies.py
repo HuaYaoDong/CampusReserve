@@ -1,3 +1,5 @@
+"""FastAPI 身份依赖：解码令牌并限制学生或管理员角色。"""
+
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, status

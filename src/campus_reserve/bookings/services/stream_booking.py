@@ -1,3 +1,5 @@
+"""异步确认链路：解析 Stream 事件、数据库幂等落库、重试与补偿。"""
+
 import json
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -38,8 +40,10 @@ class BookingReservationEvent:
     command: RedisReservationCommand
     fingerprint: str
 
+    # 不信任 Stream 原始字段；落库前验证 UUID、日期、时段和指纹。
     @classmethod
     def from_payload(cls, payload: dict[str, str]) -> "BookingReservationEvent":
+        """解析并校验 Stream 消息的字段和指纹，避免错误事件进入数据库。"""
         try:
             slot_ids = tuple(int(value) for value in payload["slot_ids"].split(","))
             command = RedisReservationCommand(
@@ -72,9 +76,12 @@ class BookingPersistenceResult:
 
 class BookingEventProcessor:
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
+        """保存数据库会话工厂，供每条事件使用独立事务。"""
         self.sessions = sessions
 
+    # 数据库事务再次校验预约规则；Redis 抢占不是最终事实。
     async def process(self, payload: dict[str, str]) -> BookingPersistenceResult:
+        """在数据库事务中重新校验并确认预约，返回可写回 Redis 的结果。"""
         event = BookingReservationEvent.from_payload(payload)
         command = event.command
         async with self.sessions() as session, session.begin():
@@ -111,6 +118,7 @@ class BookingEventProcessor:
                 booking_no=booking.booking_no,
             )
 
+    # 处理提交成功但确认 Stream 前中断的窗口，以数据库结果恢复状态。
     async def reconcile(
         self, command: RedisReservationCommand, error_code: str
     ) -> BookingPersistenceResult:
@@ -171,8 +179,10 @@ class BookingEventProcessor:
 
 
 class BookingEventHandler(Protocol):
+    # 处理原始预约事件并返回可持久化的最终结果。
     async def process(self, payload: dict[str, str]) -> BookingPersistenceResult: ...
 
+    # 异常耗尽时核对数据库已提交结果，避免错误释放成功预约。
     async def reconcile(
         self, command: RedisReservationCommand, error_code: str
     ) -> BookingPersistenceResult: ...
@@ -192,6 +202,7 @@ class BookingStreamConsumer:
         result_ttl_seconds: int = 7 * 24 * 60 * 60,
         max_deliveries: int = 5,
     ) -> None:
+        """组装 Redis 消费组、事件处理器、补偿服务和重试配置。"""
         if max_deliveries < 1:
             raise ValueError("max_deliveries must be positive")
         self.redis = redis
@@ -210,6 +221,7 @@ class BookingStreamConsumer:
         )
 
     async def ensure_group(self) -> None:
+        """创建预约 Stream 消费组；消费组已存在时继续使用。"""
         try:
             await self.redis.xgroup_create(
                 name=self.stream,
@@ -222,6 +234,7 @@ class BookingStreamConsumer:
                 raise
 
     async def read_new(self, *, count: int = 10, block_ms: int = 5_000):
+        """通过消费组阻塞读取新的预约事件。"""
         messages = await self.redis.xreadgroup(
             groupname=self.group,
             consumername=self.consumer_name,
@@ -231,7 +244,9 @@ class BookingStreamConsumer:
         )
         return [entry for _, entries in messages for entry in entries]
 
+    # 重领长时间未确认的消息，使 Worker 中断后仍能继续处理。
     async def claim_stale(self, *, min_idle_ms: int, count: int = 10):
+        """重新领取超时未确认事件，让其他 Worker 接续处理。"""
         response = await self.redis.xautoclaim(
             name=self.stream,
             groupname=self.group,
@@ -242,11 +257,13 @@ class BookingStreamConsumer:
         )
         return response[1]
 
+    # 消息处理必须幂等；异常路径交由重试、补偿或死信处理。
     async def process_message(
         self,
         message_id: str,
         payload: dict[str, str],
     ) -> BookingPersistenceResult:
+        """处理一条事件；失败时重试，必要时补偿并写入死信流。"""
         try:
             result = await self.processor.process(payload)
         except BookingEventPayloadError as exc:
@@ -278,6 +295,7 @@ class BookingStreamConsumer:
         await self._finish_message(message_id, result)
         return result
 
+    # 确认或补偿完成后再 ACK，防止尚未落定的请求丢失。
     async def _finish_message(
         self,
         message_id: str,
@@ -286,6 +304,7 @@ class BookingStreamConsumer:
         dead_letter: tuple[dict[str, str], str] | None = None,
     ) -> None:
 
+        """将最终结果写回 Redis，并在同一管道中确认 Stream 消息。"""
         request_key = self.keyspace.request(result.request_id)
         mapping = {
             "persistence_status": result.status.value,
@@ -314,6 +333,7 @@ class BookingStreamConsumer:
             pipeline.xack(self.stream, self.group, message_id)
             await pipeline.execute()
 
+    # 超过重试上限时保留可追查的死信和最终失败原因。
     async def _resolve_and_dead_letter(
         self,
         message_id: str,
@@ -321,6 +341,7 @@ class BookingStreamConsumer:
         error_code: str,
         error: str,
     ) -> BookingPersistenceResult:
+        """达到重试上限后核对数据库结果、补偿失败占位并记录死信。"""
         command = await self._reserved_command_for_message(message_id, payload)
         if command is None:
             result = BookingPersistenceResult(
@@ -343,6 +364,7 @@ class BookingStreamConsumer:
     async def _reserved_command_for_message(
         self, message_id: str, payload: dict[str, str]
     ) -> RedisReservationCommand | None:
+        """只从匹配消息 ID 的有效 Redis 占位中恢复原始预约命令。"""
         request_id = _safe_request_id(payload)
         if request_id.int == 0:
             return None
@@ -362,6 +384,7 @@ class BookingStreamConsumer:
 
 
 def _safe_request_id(payload: dict[str, str]) -> UUID:
+    """安全解析消息中的请求 UUID；无效值返回全零 UUID。"""
     try:
         return UUID(payload.get("request_id", ""))
     except (TypeError, ValueError):

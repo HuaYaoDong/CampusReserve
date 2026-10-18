@@ -1,3 +1,5 @@
+"""Redis 预约适配服务：组织键与 Lua 参数，返回原子占位和补偿结果。"""
+
 import hashlib
 import json
 from dataclasses import dataclass
@@ -58,6 +60,7 @@ class RedisConfirmedUsage:
 
     @property
     def used_slot_count(self) -> int:
+        """根据已确认的时段标识计算学生已使用的额度。"""
         return len(self.period_tokens)
 
 
@@ -86,6 +89,7 @@ class RedisReservationResult:
 
     @property
     def reserved(self) -> bool:
+        """判断 Redis 返回的结果是否为成功占位。"""
         return self.code is RedisReservationCode.RESERVED
 
 
@@ -97,32 +101,41 @@ class RedisCompensationResult:
     used_slot_count: int
 
 
+# 相同 hash tag 让 Lua 涉及的键落在一个 Redis Cluster 槽位。
 class RedisReservationKeyspace:
     def __init__(self, prefix: str = "campus-reserve:{booking}") -> None:
+        """校验并保存带 hash tag 的 Redis 键前缀，保证相关键可用于同一脚本。"""
         if "{" not in prefix or "}" not in prefix:
             raise ValueError("Redis key prefix must contain a hash tag")
         self.prefix = prefix.rstrip(":")
 
     def slots(self, batch_id: int) -> str:
+        """生成某批次场地库存状态的 Redis 键。"""
         return f"{self.prefix}:batch:{batch_id}:slots"
 
     def periods(self, batch_id: int) -> str:
+        """生成某批次时段元数据及开放门闩的 Redis 键。"""
         return f"{self.prefix}:batch:{batch_id}:periods"
 
     def inventory_marker(self, batch_id: int) -> str:
+        """生成某批次库存初始化标记的 Redis 键。"""
         return f"{self.prefix}:batch:{batch_id}:initialized"
 
     def usage(self, batch_id: int, user_id: int) -> str:
+        """生成某学生在某批次已占用数量的 Redis 键。"""
         return f"{self.prefix}:batch:{batch_id}:user:{user_id}:usage"
 
     def user_periods(self, batch_id: int, user_id: int) -> str:
+        """生成某学生在某批次已占用时段集合的 Redis 键。"""
         return f"{self.prefix}:batch:{batch_id}:user:{user_id}:periods"
 
     def request(self, request_id: UUID) -> str:
+        """生成请求 UUID 对应的临时结果 Redis 键。"""
         return f"{self.prefix}:request:{request_id}"
 
     @property
     def stream(self) -> str:
+        """返回预约事件 Stream 的 Redis 键。"""
         return f"{self.prefix}:reservation-events"
 
 
@@ -135,6 +148,7 @@ class RedisAtomicReservationService:
         ttl_seconds: int = 7 * 24 * 60 * 60,
         max_daily_slots: int = 2,
     ) -> None:
+        """注册库存初始化、预约占位和失败补偿脚本，并保存额度及过期配置。"""
         if ttl_seconds < 1:
             raise ValueError("ttl_seconds must be positive")
         if max_daily_slots < 1:
@@ -147,6 +161,7 @@ class RedisAtomicReservationService:
         self._reserve_script = redis.register_script(RESERVE_SLOTS_LUA)
         self._compensate_script = redis.register_script(COMPENSATE_RESERVATION_LUA)
 
+    # 用批次快照初始化 Redis；相同快照重试不得覆盖已有占位。
     async def initialize_inventory(
         self,
         batch_id: int,
@@ -154,6 +169,7 @@ class RedisAtomicReservationService:
         slots: list[RedisInventorySlot],
         confirmed_usages: list[RedisConfirmedUsage] | None = None,
     ) -> RedisInventoryResult:
+        """用数据库批次快照初始化 Redis 库存；相同快照重试不会覆盖已有占位。"""
         normalized = sorted(slots, key=lambda slot: slot.slot_id)
         normalized_usages = sorted(confirmed_usages or [], key=lambda usage: usage.user_id)
         payload = [
@@ -209,7 +225,9 @@ class RedisAtomicReservationService:
             slot_count=int(response[2]),
         )
 
+    # 一次 Lua 调用同时检查额度、占库存和写入待处理事件。
     async def reserve(self, command: RedisReservationCommand) -> RedisReservationResult:
+        """调用 Lua 一次完成规则检查、库存占位、额度更新和 Stream 入队。"""
         slot_ids = tuple(sorted(command.slot_ids))
         fingerprint = reservation_fingerprint(command)
         response = await self._reserve_script(
@@ -240,6 +258,7 @@ class RedisAtomicReservationService:
             stream_id=response[3] or None,
         )
 
+    # 只释放仍由该请求持有的占位，避免误放其他请求的库存。
     async def compensate(
         self,
         command: RedisReservationCommand,
@@ -247,6 +266,7 @@ class RedisAtomicReservationService:
         *,
         compensated_at: datetime | None = None,
     ) -> RedisCompensationResult:
+        """数据库确认失败时，仅释放仍由本请求持有的库存及额度。"""
         slot_ids = tuple(sorted(command.slot_ids))
         response = await self._compensate_script(
             keys=[
@@ -275,11 +295,14 @@ class RedisAtomicReservationService:
 
 
 def _fingerprint(value: object) -> str:
+    """把结构化数据规范化并计算 SHA-256 指纹，供幂等比较。"""
     serialized = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode()).hexdigest()
 
 
+# 请求指纹用于识别同 UUID 但内容不同的幂等冲突。
 def reservation_fingerprint(command: RedisReservationCommand) -> str:
+    """将预约命令的关键字段组成指纹，识别同 UUID 的不同请求内容。"""
     return _fingerprint(
         {
             "request_id": str(command.request_id),

@@ -1,3 +1,6 @@
+-- 放号初始化脚本：数据库批次快照进入 Redis，同时恢复已确认的用户额度。
+-- KEYS 前三项是库存、批次时段和快照指纹；其后按用户追加额度键与时段集合键。
+-- 统一读取 Redis 键类型，兼容 TYPE 在不同客户端中的返回形式。
 local function key_type(key)
     local result = redis.call("TYPE", key)
     if type(result) == "table" then
@@ -40,6 +43,7 @@ for index = 1, confirmed_user_count do
 end
 
 local stored_fingerprint = redis.call("GET", KEYS[3])
+-- 同一快照重试返回已初始化；不同快照不能覆盖已开放的库存。
 if stored_fingerprint then
     if stored_fingerprint == fingerprint then
         return {"INITIALIZED", "1", tostring(slot_count)}
@@ -71,6 +75,7 @@ for index = 1, slot_count do
 end
 
 local confirmed_cursor = 6 + slot_count * 3
+-- 已落库预约要计入 Redis 额度，否则恢复放号后用户可能超出每日上限。
 local confirmed_usages = {}
 for index = 1, confirmed_user_count do
     local user_id = ARGV[confirmed_cursor]

@@ -1,3 +1,4 @@
+/* 全局色彩与字体；组件级业务状态样式放在后续对应区块。 */
 :root {
   font-family: Inter, "Microsoft YaHei", system-ui, sans-serif;
   color: #18332e;
@@ -43,6 +44,7 @@ h2 { margin-bottom: 0; font-size: 26px; }
 .button-spinner { width: 16px; height: 16px; border-color: rgba(255,255,255,.4); border-top-color: white; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* 登录页在宽屏左右分栏，窄屏由底部媒体查询改为单栏。 */
 .login-page { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(480px, .95fr); }
 .brand-panel {
   position: relative;
@@ -126,6 +128,7 @@ input:focus { border-color: #178a72; box-shadow: 0 0 0 4px rgba(23,138,114,.11);
 .green-text { color: #0d8069 !important; font-weight: 700; }
 .orange-text { color: #a26617 !important; font-weight: 700; }
 
+/* 库存矩阵保留横向滚动，避免手机上挤压场地名称与小时列。 */
 .inventory-section { margin-top: 24px; padding: 28px; border: 1px solid #dce8e4; border-radius: 20px; background: white; box-shadow: 0 12px 35px rgba(22,74,62,.05); }
 .service-date-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 26px; }
 .service-date-picker > span { margin-right: 4px; color: #536b63; font-size: 14px; font-weight: 800; }
@@ -180,6 +183,7 @@ input:focus { border-color: #178a72; box-shadow: 0 0 0 4px rgba(23,138,114,.11);
 .booking-feedback.success-state { color: #096c58; background: #e5f7f0; }
 .booking-feedback.error-state { color: #a13e3e; background: #fceaea; }
 .my-bookings-section { margin-top: 24px; padding: 28px; border: 1px solid #dce8e4; border-radius: 20px; background: white; box-shadow: 0 12px 35px rgba(22,74,62,.05); }
+/* 异步请求卡片与成功预约卡片分开显示，处理中不能误认为已确认。 */
 .request-history-heading { display: flex; align-items: start; justify-content: space-between; gap: 20px; }
 .request-history-heading p:last-child { margin: 9px 0 0; color: #71817c; font-size: 13px; }
 .request-record { margin-top: 16px; padding: 18px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border: 1px solid #e1ebe7; border-radius: 13px; }
@@ -200,6 +204,7 @@ input:focus { border-color: #178a72; box-shadow: 0 0 0 4px rgba(23,138,114,.11);
 .booking-record > div:first-child .booking-service-date { color: #176b57; font-size: 14px; font-weight: 700; }
 .booking-status { padding: 7px 10px; border-radius: 99px; color: #08705b; background: #e4f7f0; font-size: 12px; font-weight: 800; }
 
+/* 两档断点依次处理平板和手机的布局折叠。 */
 @media (max-width: 920px) {
   .login-page { grid-template-columns: 1fr; }
   .brand-panel { min-height: 390px; padding: 50px 34px; }

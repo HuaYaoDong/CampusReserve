@@ -1,3 +1,5 @@
+"""并发探测数据库与 Redis，生成健康报告。"""
+
 import asyncio
 from collections.abc import Awaitable, Callable
 

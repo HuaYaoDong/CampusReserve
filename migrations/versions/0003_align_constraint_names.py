@@ -2,7 +2,9 @@
 
 Revision ID: 0003_constraint_names
 Revises: 0002_core_models
-"""
+
+
+统一预约请求一对一约束名称，便于后续迁移引用。"""
 
 from alembic import op
 

@@ -1,3 +1,5 @@
+"""管理集成测试：验证权限、批次状态、例外日、签到和审计。"""
+
 from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo

@@ -2,7 +2,9 @@
 
 Revision ID: 0002_core_models
 Revises: 0001_bootstrap
-"""
+
+
+建立核心业务表、约束及固定场馆和场地种子数据。"""
 
 from alembic import op
 
@@ -19,6 +21,7 @@ def _execute_statements(sql: str) -> None:
             op.execute(statement)
 
 
+# 迁移同时建立业务表与数据库级约束，保证绕过 API 时也不超卖。
 def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS btree_gist")
     _execute_statements(

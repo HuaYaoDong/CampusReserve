@@ -1,3 +1,5 @@
+"""预约接口：提交异步请求、查询处理结果并读取本人预约。"""
+
 from typing import Annotated
 from uuid import UUID
 
@@ -45,6 +47,7 @@ REDIS_ERROR_MESSAGES = {
 }
 
 
+# 接口受理不等于预约成功；返回请求编号供异步查询。
 @router.post(
     "/booking-requests",
     response_model=BookingRequestResponse,
@@ -55,6 +58,7 @@ async def create_booking_request(
     principal: CurrentPrincipal,
     response: Response,
 ) -> BookingRequestResponse:
+    """受理学生预约：用 Redis 原子占位并返回可继续查询的请求编号；占位不代表数据库确认。"""
     _require_student(principal.role)
     redis = get_redis()
     keyspace = RedisReservationKeyspace()
@@ -96,6 +100,7 @@ async def create_booking_request(
     return result_response
 
 
+# 只允许请求所有者读取结果，并先核对数据库最终状态。
 @router.get(
     "/booking-requests/{request_id}",
     response_model=BookingRequestResponse,
@@ -105,6 +110,7 @@ async def get_booking_request(
     principal: CurrentPrincipal,
     session: DatabaseSession,
 ) -> BookingRequestResponse:
+    """按请求编号查询本人预约的最终结果；必要时从数据库读取已确认记录。"""
     _require_student(principal.role)
     redis_state = await get_redis().hgetall(RedisReservationKeyspace().request(request_id))
     if redis_state:
@@ -129,6 +135,7 @@ async def list_my_bookings(
     principal: CurrentPrincipal,
     session: DatabaseSession,
 ) -> list[BookingResponse]:
+    """查询当前学生已落库的预约列表，并转换为接口响应。"""
     _require_student(principal.role)
     service = SyncBookingService(SqlAlchemyBookingRepository(session))
     bookings = await service.list_bookings(principal.user_id)
@@ -141,6 +148,7 @@ async def get_my_booking(
     principal: CurrentPrincipal,
     session: DatabaseSession,
 ) -> BookingResponse:
+    """按预约主键查询当前学生的预约详情，拒绝查看他人记录。"""
     _require_student(principal.role)
     service = SyncBookingService(SqlAlchemyBookingRepository(session))
     try:
@@ -155,6 +163,7 @@ def _request_response(
     *,
     replayed: bool,
 ) -> BookingRequestResponse:
+    """把数据库中的预约请求及关联预约转换成接口响应。"""
     return BookingRequestResponse(
         request_id=request.request_id,
         status=request.status,
@@ -166,6 +175,7 @@ def _request_response(
 
 
 def _booking_response(booking: Booking) -> BookingResponse:
+    """把预约主记录和按开始时间排序的场地明细转换成响应。"""
     return BookingResponse(
         id=booking.id,
         request_id=booking.request_id,
@@ -189,6 +199,7 @@ def _booking_response(booking: Booking) -> BookingResponse:
 
 
 def _require_student(role: UserRole) -> None:
+    """检查当前账号角色；只有学生可以使用学生预约接口。"""
     if role is not UserRole.STUDENT:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -197,6 +208,7 @@ def _require_student(role: UserRole) -> None:
 
 
 def _booking_error(error: BookingRuleError) -> HTTPException:
+    """按业务错误类型选择 HTTP 状态码并构造统一错误内容。"""
     not_found_codes = {"REQUEST_NOT_FOUND", "BOOKING_NOT_FOUND", "SLOTS_NOT_FOUND"}
     invalid_codes = {
         "INVALID_SLOT_COUNT",
@@ -220,6 +232,7 @@ def _booking_error(error: BookingRuleError) -> HTTPException:
     )
 
 
+# Redis 占位仅能标记处理中，不能把占位响应映射成最终确认。
 def _redis_request_response(
     request_id: UUID,
     state: dict[str, str],
@@ -227,6 +240,7 @@ def _redis_request_response(
     replayed: bool,
     fallback_code: str | None = None,
 ) -> BookingRequestResponse:
+    """将 Redis 暂存状态转换成请求状态；仅持久化确认后才报告成功。"""
     code = state.get("code") or fallback_code or "REDIS_STATE_INVALID"
     persistence_status = state.get("persistence_status")
     if persistence_status == BookingRequestStatus.CONFIRMED.value:
@@ -252,6 +266,7 @@ def _redis_request_response(
 
 
 def _redis_error_status(code: RedisReservationCode) -> int:
+    """把 Redis 预约错误映射为对应的 HTTP 状态码。"""
     if code in {
         RedisReservationCode.INVALID_SLOT_COUNT,
         RedisReservationCode.SLOTS_MUST_BE_UNIQUE,
@@ -266,6 +281,7 @@ def _redis_error_status(code: RedisReservationCode) -> int:
 
 
 def _not_found_request() -> HTTPException:
+    """生成统一的请求不存在响应，也用于隐藏他人的请求编号。"""
     return HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail={"code": "REQUEST_NOT_FOUND", "message": "预约请求不存在"},

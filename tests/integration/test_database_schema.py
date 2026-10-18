@@ -1,3 +1,5 @@
+"""数据库约束测试：种子数据、每日额度和同场地防超卖。"""
+
 from uuid import uuid4
 
 import pytest

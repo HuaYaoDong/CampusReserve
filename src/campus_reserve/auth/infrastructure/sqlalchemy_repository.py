@@ -1,3 +1,5 @@
+"""SQLAlchemy 用户仓储：根据账号或主键读取认证资料。"""
+
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select

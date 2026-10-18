@@ -1,3 +1,5 @@
+"""放号批次与最小场地时段库存实体。"""
+
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -22,6 +24,7 @@ if TYPE_CHECKING:
     from campus_reserve.venues.models import Court, Venue
 
 
+# 一个场馆在一个使用日期的一次放号；保存规则快照与操作状态。
 class ReleaseBatch(TimestampMixin, Base):
     __tablename__ = "release_batch"
     __table_args__ = (
@@ -61,6 +64,7 @@ class ReleaseBatch(TimestampMixin, Base):
     booking_requests: Mapped[list["BookingRequest"]] = relationship(back_populates="release_batch")
 
 
+# 最小可占用库存单元：场地加使用日期加固定时间窗。
 class BookingSlot(TimestampMixin, Base):
     __tablename__ = "booking_slot"
     __table_args__ = (

@@ -1,3 +1,5 @@
+"""异步预约接口测试：占位后由 Worker 确认并允许查询最终结果。"""
+
 from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 

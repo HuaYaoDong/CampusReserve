@@ -1,3 +1,5 @@
+"""Locust 演示脚本；当前只请求健康接口，不代表预约全链路容量。"""
+
 from locust import HttpUser, between, task
 
 

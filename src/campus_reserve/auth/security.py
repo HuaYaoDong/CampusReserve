@@ -1,3 +1,5 @@
+"""密码哈希和 JWT 签发验证；不得在接口层直接处理明文密码。"""
+
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -32,6 +34,7 @@ def verify_password(password: str, encoded_hash: str) -> bool:
     return password_hash.verify(password, encoded_hash)
 
 
+# JWT 只携带必要身份声明并设置有限有效期。
 def create_access_token(user: User, settings: Settings | None = None) -> tuple[str, int]:
     active_settings = settings or get_settings()
     now = datetime.now(UTC)
@@ -48,6 +51,7 @@ def create_access_token(user: User, settings: Settings | None = None) -> tuple[s
     return token, expires_in
 
 
+# 校验签名、签发方和过期时间，不只相信令牌中的角色文本。
 def decode_access_token(token: str, settings: Settings | None = None) -> AuthPrincipal:
     active_settings = settings or get_settings()
     try:

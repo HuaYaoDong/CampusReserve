@@ -1,3 +1,5 @@
+"""库存服务：按开放模板与例外日生成时段，并幂等同步放号批次。"""
+
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
@@ -41,6 +43,7 @@ class InventoryView:
     slot_rows: list[InventorySlotRow]
 
 
+# 按场馆时区计算固定长度窗口，避免使用宿主机本地时区。
 def build_slot_windows(
     service_date: date,
     open_time: time,
@@ -63,6 +66,7 @@ class InventoryService:
     def __init__(self, repository: InventoryRepository) -> None:
         self.repository = repository
 
+    # 先确定目标日期与放号时间，再持久化或复用已存在批次。
     async def synchronize_target(
         self, now: datetime, service_date: date | None = None
     ) -> InventorySyncResult:
@@ -178,6 +182,7 @@ class InventoryService:
         rows = await self.repository.list_batch_slots(batch.id)
         return InventoryView(venue, template, courts, batch, rows)
 
+    # 开放模板叠加例外日期和停用场地，产出实际库存时段。
     @staticmethod
     def _plan_slots(
         venue: Venue,

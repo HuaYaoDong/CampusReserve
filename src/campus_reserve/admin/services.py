@@ -1,3 +1,5 @@
+"""管理员业务编排：维护规则、控制放号、同步 Redis 门闩并处理签到。"""
+
 from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -107,6 +109,7 @@ class AdminService:
             batches=[BatchView.model_validate(batch) for batch in batches],
         )
 
+    # 场馆停用时需要同步拦截已开放批次的新预约。
     async def update_venue(self, patch: VenuePatch) -> VenueView:
         venue = await self._venue(for_update=True)
         before = self._venue_data(venue)
@@ -125,6 +128,7 @@ class AdminService:
         await self.session.commit()
         return VenueView.model_validate(venue)
 
+    # 场地状态变更要同时处理数据库时段与 Redis 可预约状态。
     async def update_court(self, court_id: int, patch: CourtPatch) -> CourtView:
         court = await self.session.scalar(
             select(Court).where(Court.id == court_id, Court.venue_id == 1).with_for_update()
@@ -259,6 +263,7 @@ class AdminService:
         await self.session.commit()
         return ExceptionView.model_validate(item)
 
+    # 预览不写库；生成时锁定日期并拒绝修改已有批次的历史规则。
     async def preview_or_generate(
         self, service_date: date, preview_only: bool,
     ) -> GenerationPreview:
@@ -341,6 +346,7 @@ class AdminService:
         return preview.model_copy(update={"existing_batch_id": batch.id,
                                   "batch": BatchView.model_validate(batch)})
 
+    # 发布只使草稿就绪，真正放号仍取决于批次时间和状态。
     async def publish_batch(self, batch_id: int) -> BatchView:
         batch = await self._batch(batch_id)
         if batch.status is ReleaseBatchStatus.DRAFT:
@@ -352,6 +358,7 @@ class AdminService:
             raise AdminRuleError("INVALID_BATCH_STATE", "只有草稿批次可以发布")
         return BatchView.model_validate(batch)
 
+    # 暂停、关闭和恢复先更新 Redis 入口，再维持批次状态一致。
     async def change_batch(self, batch_id: int, action: str) -> BatchView:
         batch = await self._batch(batch_id)
         before = batch.status
@@ -445,6 +452,7 @@ class AdminService:
         bookings = list((await self.session.scalars(statement)).unique().all())
         return [self._booking_view(booking) for booking in bookings]
 
+    # 签到先锁定预约并检查已有记录，重复请求返回同一结果。
     async def check_in(self, booking_id: int, data: CheckInRequest) -> CheckInView:
         booking = await self.session.scalar(
             select(Booking).where(Booking.id == booking_id).with_for_update(of=Booking)
@@ -491,6 +499,7 @@ class AdminService:
         )).all())
         return [AuditView.model_validate(row) for row in rows]
 
+    # 恢复放号前用数据库库存重建 Redis，避免覆盖未完成占位。
     async def _sync_open_batch(self, batch: ReleaseBatch) -> None:
         rows = list((await self.session.scalars(
             select(BookingSlot).options(joinedload(BookingSlot.court))
@@ -559,6 +568,7 @@ class AdminService:
             self._audit("BATCH_PAUSED", "release_batch", batch.id,
                         {"status": "OPEN"}, {"status": "PAUSED"})
 
+    # Redis 批次门闩是预约 Lua 的实时准入条件。
     async def _set_redis_gate(self, batch_id: int, state: str) -> None:
         key = self.keys.periods(batch_id)
         if await self.redis.exists(key):
@@ -596,6 +606,7 @@ class AdminService:
         return await self.session.scalar(select(ReleaseBatch).where(
             ReleaseBatch.venue_id == 1, ReleaseBatch.service_date == service_date))
 
+    # 同日生成需要跨进程互斥，防止调度器与管理端重复建批次。
     async def _lock_generation_date(self, service_date: date) -> None:
         await self.session.execute(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_name, 0))"),

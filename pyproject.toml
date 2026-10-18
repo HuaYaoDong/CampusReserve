@@ -1,3 +1,4 @@
+# Python 项目构建、运行依赖及测试/静态检查配置集中在此。
 [build-system]
 requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"
@@ -38,6 +39,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
+# Lua 脚本必须随 Python 包一起分发，预约服务运行时会从包路径读取。
 campus_reserve = ["bookings/infrastructure/lua/*.lua"]
 
 [tool.pytest.ini_options]

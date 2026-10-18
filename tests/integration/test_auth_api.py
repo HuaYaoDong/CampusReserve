@@ -1,3 +1,5 @@
+"""登录和当前用户接口的集成测试。"""
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select

@@ -1,3 +1,5 @@
+"""健康接口返回结构，区分整体状态和各依赖状态。"""
+
 from typing import Literal
 
 from pydantic import BaseModel

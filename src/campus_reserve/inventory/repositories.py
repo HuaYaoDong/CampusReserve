@@ -1,3 +1,5 @@
+"""库存仓储协议和查询行结构。"""
+
 from datetime import date, datetime
 from typing import Protocol
 

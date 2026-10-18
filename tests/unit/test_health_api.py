@@ -1,3 +1,5 @@
+"""健康接口单元测试。"""
+
 from httpx import ASGITransport, AsyncClient
 
 from apps.api.main import app

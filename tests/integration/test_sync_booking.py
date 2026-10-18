@@ -1,3 +1,5 @@
+"""同步数据库预约测试：冲突、过期、额度、并发和事务原子性。"""
+
 import asyncio
 from datetime import UTC, date, datetime, timedelta
 from uuid import UUID, uuid4

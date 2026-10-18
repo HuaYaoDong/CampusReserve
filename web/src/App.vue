@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// 学生入口：会话、今日/明日库存、预约请求找回和个人预约都在此组件协调。
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import AdminPanel from "./AdminPanel.vue";
 
@@ -87,8 +88,10 @@ type TrackedRequest = {
 };
 
 const SESSION_KEY = "campus-reserve-access-token";
+// 请求记录按用户隔离；轮询结束后保留 UUID，便于刷新页面后继续查询。
 const REQUESTS_KEY_PREFIX = "campus-reserve-booking-requests-v1-";
 const SHANGHAI_TIME_ZONE = "Asia/Shanghai";
+// 日期以场馆所在时区为准，不能直接使用浏览器机器的本地日期。
 function shanghaiDateISO(now = new Date()) {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: SHANGHAI_TIME_ZONE,
@@ -151,6 +154,7 @@ const bookableSlotCount = computed(() => inventory.value?.courts.reduce((count, 
 const isTodayInventory = computed(() => inventory.value?.service_date === todayServiceDate.value);
 
 async function login() {
+  // 登录成功后还要读取本人预约与未完成请求，页面状态才算恢复完成。
   loginError.value = "";
   loginLoading.value = true;
   try {
@@ -236,6 +240,7 @@ async function refreshHealth() {
 }
 
 async function refreshInventory() {
+  // 多次切换日期时只接受最后一次请求的响应，避免旧响应覆盖新日期。
   if (!token.value) return;
   updateDateWindow();
   const revision = ++inventoryFetchRevision;
@@ -267,6 +272,7 @@ async function refreshInventory() {
 }
 
 function selectServiceDate(serviceDate: string) {
+  // 只开放今天和明天两个入口；具体时段是否可订仍由服务端校验。
   updateDateWindow();
   if (bookingLoading.value || requestedServiceDate.value === serviceDate ||
     !selectableServiceDates.value.includes(serviceDate)) return;
@@ -280,6 +286,7 @@ function selectServiceDate(serviceDate: string) {
 }
 
 function updateDateWindow() {
+  // 跨过上海时区的午夜后同步日期窗口，清除已不属于今天/明天的选择。
   nowMilliseconds.value = Date.now();
   if (inventory.value && selectedSlotIds.value.length) {
     const availableIds = new Set(inventory.value.courts.flatMap((court) => court.slots)
@@ -332,6 +339,7 @@ function requestStorageKey() {
 }
 
 function saveTrackedRequests() {
+  // 本地记录只用于找回查询入口，不作为预约成功的事实来源。
   const key = requestStorageKey();
   if (!key) return;
   // Keep every unresolved request. Limit completed history so local storage stays small.
@@ -385,6 +393,7 @@ function applyRequestResult(result: BookingRequestResult) {
 }
 
 async function queryTrackedRequest(requestId: string) {
+  // 结果查询同时刷新库存和个人预约，避免只更新一张状态卡片。
   if (!token.value || queryingRequestIds.value.includes(requestId)) return;
   const userId = user.value?.id;
   queryingRequestIds.value = [...queryingRequestIds.value, requestId];
@@ -432,6 +441,7 @@ function removeTrackedRequest(requestId: string) {
 }
 
 function toggleSlot(slot: InventorySlot) {
+  // 前端限制一次最多两个时段，后端仍会重做额度与批次检查。
   if (visibleSlotStatus(slot) !== "AVAILABLE" || bookingLoading.value) return;
   bookingMessage.value = "";
   bookingError.value = "";
@@ -447,6 +457,7 @@ function toggleSlot(slot: InventorySlot) {
 }
 
 async function submitBooking() {
+  // 先保存请求 UUID 再发起请求，网络超时也不会丢失继续查询的凭证。
   updateDateWindow();
   if (!token.value || !inventory.value || !selectableServiceDates.value.includes(inventory.value.service_date) ||
     selectedSlotIds.value.length === 0 ||
@@ -531,6 +542,7 @@ async function submitBooking() {
 }
 
 async function waitForBookingResult(requestId: string): Promise<BookingRequestResult | null> {
+  // 短时轮询只改善交互；超时后维持处理中并允许用户稍后查询。
   for (let attempt = 0; attempt < 20; attempt += 1) {
     await new Promise((resolve) => window.setTimeout(resolve, 250));
     const response = await fetch(`/api/v1/booking-requests/${requestId}`, {
@@ -578,6 +590,7 @@ function slotLabel(status: SlotStatus) {
 }
 
 function visibleSlotStatus(slot: InventorySlot): SlotStatus {
+  // 今天过去的时段仍展示：已订出优先显示已预约，否则显示已过期。
   if (Date.parse(slot.start_at) <= nowMilliseconds.value) {
     return slot.status === "BOOKED" ? "BOOKED" : "EXPIRED";
   }

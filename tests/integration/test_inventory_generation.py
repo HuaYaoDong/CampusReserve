@@ -1,3 +1,5 @@
+"""库存生成测试：重复执行幂等，放号与 Redis 状态同步。"""
+
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 

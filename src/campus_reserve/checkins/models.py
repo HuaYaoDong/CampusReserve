@@ -1,3 +1,5 @@
+"""现场签到记录；通过唯一关系避免同一预约重复签到。"""
+
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -21,6 +23,7 @@ if TYPE_CHECKING:
     from campus_reserve.users.models import User
 
 
+# 管理员现场签到记录；同一预约只应对应一次有效签到。
 class CheckIn(TimestampMixin, Base):
     __tablename__ = "check_in"
     __table_args__ = (

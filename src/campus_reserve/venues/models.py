@@ -1,3 +1,5 @@
+"""场馆、场地、开放模板与例外日期的 ORM 实体。"""
+
 from datetime import date, time
 from typing import TYPE_CHECKING, Any
 
@@ -32,6 +34,7 @@ if TYPE_CHECKING:
     from campus_reserve.inventory.models import BookingSlot, ReleaseBatch
 
 
+# 场馆级配置保存时区，日期和开放时间都按该时区计算。
 class Venue(TimestampMixin, Base):
     __tablename__ = "venue"
     __table_args__ = (
@@ -55,6 +58,7 @@ class Venue(TimestampMixin, Base):
     bookings: Mapped[list["Booking"]] = relationship(back_populates="venue")
 
 
+# 场馆内可独立预约的一片场地，停用状态影响库存可用性。
 class Court(TimestampMixin, Base):
     __tablename__ = "court"
     __table_args__ = (
@@ -84,6 +88,7 @@ class Court(TimestampMixin, Base):
     booking_slots: Mapped[list["BookingSlot"]] = relationship(back_populates="court")
 
 
+# 长期开放规则；星期掩码和时间范围决定正常日期的时段。
 class OpeningTemplate(TimestampMixin, Base):
     __tablename__ = "opening_template"
     __table_args__ = (
@@ -127,6 +132,7 @@ class OpeningTemplate(TimestampMixin, Base):
     venue: Mapped[Venue] = relationship(back_populates="opening_templates")
 
 
+# 特定日期覆盖模板，可作用于整个场馆或单片场地。
 class CalendarException(TimestampMixin, Base):
     __tablename__ = "calendar_exception"
     __table_args__ = (

@@ -1,6 +1,8 @@
+# 本地课程演示编排：数据库和 Redis 持久化，API/Worker/调度器分进程运行。
 name: campus-reserve
 
 x-backend-environment: &backend-environment
+# API、Worker 和调度器共享同一组连接与令牌参数，避免环境漂移。
   APP_NAME: ${APP_NAME:-CampusReserve}
   APP_ENV: ${APP_ENV:-development}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -22,6 +24,7 @@ x-backend-build: &backend-build
   dockerfile: deploy/docker/backend.Dockerfile
 
 services:
+  # 迁移任务在 PostgreSQL 健康后执行，业务进程等待迁移成功。
   postgres:
     image: postgres:16-alpine
     environment:
@@ -63,6 +66,7 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # 双 API 实例由 Nginx 分配请求；健康接口也用于容器就绪判断。
   api-1:
     build: *backend-build
     command: ["uvicorn", "apps.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
@@ -101,6 +105,7 @@ services:
       retries: 12
     restart: unless-stopped
 
+  # 两个消费者加入同一 Stream 消费组，可接管彼此超时的未确认消息。
   booking-worker-1:
     build: *backend-build
     command: ["python", "-m", "apps.booking_worker.main"]
@@ -137,6 +142,7 @@ services:
       retries: 12
     restart: unless-stopped
 
+  # 定时进程补齐库存并将结束时段的预约归档。
   scheduler:
     build: *backend-build
     command: ["python", "-m", "apps.scheduler.main"]
@@ -155,6 +161,7 @@ services:
       retries: 12
     restart: unless-stopped
 
+  # Nginx 同时提供前端静态文件和 /api 反向代理。
   nginx:
     build:
       context: .

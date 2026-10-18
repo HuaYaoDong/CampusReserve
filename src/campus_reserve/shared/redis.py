@@ -1,3 +1,5 @@
+"""共享 Redis 异步连接的创建、复用和关闭。"""
+
 from redis.asyncio import Redis
 
 from campus_reserve.shared.config import get_settings

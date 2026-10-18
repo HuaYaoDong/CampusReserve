@@ -1,3 +1,5 @@
+"""库存仓储：读取开放配置、锁定日期并保存批次和时段。"""
+
 from datetime import date, datetime
 
 from sqlalchemy import func, select, text, update

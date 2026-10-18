@@ -1,3 +1,5 @@
+"""预约提交与结果查询的 API 输入输出模型。"""
+
 from datetime import date, datetime
 from uuid import UUID
 

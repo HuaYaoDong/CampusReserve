@@ -1,3 +1,5 @@
+"""预约 Worker 入口：读取新消息与超时未确认消息，并维护心跳。"""
+
 import asyncio
 import os
 import socket
@@ -17,6 +19,7 @@ settings = get_settings()
 configure_logging(settings.log_level)
 logger = get_logger(__name__)
 
+# 循环消费新消息并重领超时消息；只有结果安全处理后才确认 Stream。
 async def run() -> None:
     consumer_name = os.getenv("WORKER_CONSUMER_NAME", socket.gethostname())
     redis = get_redis()

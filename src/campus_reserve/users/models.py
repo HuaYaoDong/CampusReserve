@@ -1,3 +1,5 @@
+"""用户账号及按使用日期统计的每日预约额度实体。"""
+
 from datetime import date, datetime
 from typing import TYPE_CHECKING
 
@@ -22,6 +24,7 @@ if TYPE_CHECKING:
     from campus_reserve.bookings.models import Booking, BookingItem, BookingRequest
 
 
+# 登录主体；角色和状态决定接口权限，密码字段只保存哈希。
 class User(TimestampMixin, Base):
     __tablename__ = "app_user"
     __table_args__ = (
@@ -59,6 +62,7 @@ class User(TimestampMixin, Base):
     booking_items: Mapped[list["BookingItem"]] = relationship(back_populates="user")
 
 
+# 按用户与使用日期累计额度，并发预约需锁定这条记录。
 class UserDailyUsage(TimestampMixin, Base):
     __tablename__ = "user_daily_usage"
     __table_args__ = (

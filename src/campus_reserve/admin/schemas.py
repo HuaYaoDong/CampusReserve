@@ -1,3 +1,5 @@
+"""管理 API 的请求和响应模型；把表单数据与数据库实体隔离。"""
+
 from datetime import date, datetime, time
 from typing import Any
 

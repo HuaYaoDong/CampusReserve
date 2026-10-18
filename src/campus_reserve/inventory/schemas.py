@@ -1,3 +1,5 @@
+"""场馆、场地及库存矩阵的 HTTP 响应结构。"""
+
 from datetime import date, datetime, time
 from typing import Literal
 

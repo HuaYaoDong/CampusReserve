@@ -1,3 +1,6 @@
+-- 数据库明确失败后的补偿脚本；仅释放仍属于本请求的 Redis 占位。
+-- KEYS: 库存、批次时段、用户额度、用户时段集合、请求结果。
+-- 统一读取 Redis 键类型，避免把类型错误的键当作预约状态处理。
 local function key_type(key)
     local result = redis.call("TYPE", key)
     if type(result) == "table" then
@@ -28,10 +31,12 @@ if redis.call("HGET", KEYS[5], "request_id") ~= request_id
     return {"OWNERSHIP_MISMATCH", "0", "0", redis.call("GET", KEYS[3]) or "0"}
 end
 if redis.call("HGET", KEYS[5], "compensation_status") == "RELEASED" then
+    -- 重复补偿保持幂等，不再次减少额度。
     return {"RELEASED", "1", "0", redis.call("GET", KEYS[3]) or "0"}
 end
 
 local expected_owner = "RESERVED:" .. request_id .. ":" .. user_id
+-- 逐时段检查占位所有者，防止释放后被别人重新占用的库存。
 local released_count = 0
 for index = 1, slot_count do
     local slot_id = ARGV[6 + index]
